@@ -7,9 +7,9 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional
-import httpx
+from urllib.parse import urlencode
 
-from bson import ObjectId
+import requests
 
 from ..core.config import get_settings
 from ..core.mongodb import get_collection
@@ -26,138 +26,255 @@ class SyncService:
 
     def __init__(self):
         self.settings = get_settings()
-        self._client: Optional[httpx.AsyncClient] = None
-        self._sync_lock = asyncio.Lock()
-        self._sync_timeout: int = 3600
+        self._is_running = False
+        self.servers_count = 0
+        self.details_count = 0
+        self._base_url = self.settings.sync_api_base_url
+        self._headers = {
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Origin": self._base_url,
+            "Referer": f"{self._base_url}/page/monitor_list.html",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        self._cookies = {"rolePower": ""}
 
     @property
-    def client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                base_url=self.settings.sync_api_base_url,
-                timeout=httpx.Timeout(self.settings.sync_api_timeout),
-                follow_redirects=True
+    def is_running(self) -> bool:
+        return self._is_running
+
+    def _post(self, path: str, data: dict) -> dict:
+        """发送 POST 请求（同步，在线程池中运行以避免阻塞事件循环）"""
+        body = urlencode({k: v for k, v in data.items() if v is not None})
+        full_url = f"{self._base_url}{path}"
+        print(f"[HTTP] POST {full_url}")
+        print(f"[HTTP] Body: {body[:200]}")
+        try:
+            resp = requests.post(
+                full_url, data=body,
+                headers=self._headers, cookies=self._cookies,
+                timeout=self.settings.sync_api_timeout
             )
-        return self._client
+            print(f"[HTTP] Status: {resp.status_code}")
+            print(f"[HTTP] Body[:500]: {resp.text[:500]}")
+            resp.raise_for_status()
+            result = resp.json()
+            data_len = len(result.get("data", [])) if isinstance(result, dict) else 0
+            total = result.get("total", "?")
+            print(f"[HTTP] OK | {data_len} records, total={total}")
+            return result
+        except Exception as e:
+            print(f"[HTTP] FAILED: {type(e).__name__}: {e}")
+            raise
 
-    async def close(self):
-        if self._client:
-            await self._client.aclose()
-            self._client = None
+    async def _post_async(self, path: str, data: dict) -> dict:
+        """异步包装 _post，在线程池中执行同步 requests 调用"""
+        return await asyncio.to_thread(self._post, path, data)
 
-    async def _post(self, url: str, data: dict) -> dict:
-        """发送 POST 请求，带指数退避重试"""
-        for attempt in range(self.settings.sync_max_retries):
-            try:
-                resp = await self.client.post(url, data=data)
-                resp.raise_for_status()
-                return resp.json()
-            except httpx.HTTPStatusError as e:
-                logger.warning(f"HTTP error on attempt {attempt + 1}: {e}")
-                if attempt == self.settings.sync_max_retries - 1:
-                    raise
-                await asyncio.sleep(2 ** attempt)
-            except httpx.TimeoutException as e:
-                logger.warning(f"Timeout on attempt {attempt + 1}: {e}")
-                if attempt == self.settings.sync_max_retries - 1:
-                    raise
-                await asyncio.sleep(2 ** attempt)
-            except Exception as e:
-                logger.error(f"Request failed: {e}")
-                raise
+    async def sync_all(self, full: bool = False) -> dict:
+        """执行全量/增量同步"""
+        if self._is_running:
+            return {"message": "同步任务已在运行中"}
 
-    async def _get_running_job(self) -> Optional[dict]:
-        """获取当前运行中的同步任务"""
-        col = get_collection("sync_jobs")
-        return await col.find_one({"status": "running"})
+        self._is_running = True
+        self.servers_count = 0
+        self.details_count = 0
+        servers_total = 0
+        servers_new = 0
+        details_total = 0
+        details_new = 0
+        skipped_servers = 0
 
-    async def _create_job(self) -> str:
-        """创建同步任务记录"""
-        col = get_collection("sync_jobs")
-        result = await col.insert_one({
-            "status": "running",
-            "started_at": _now_iso(),
-            "finished_at": None,
-            "servers_total": 0,
-            "servers_new": 0,
-            "details_total": 0,
-            "details_new": 0,
-            "error_message": ""
-        })
-        return str(result.inserted_id)
+        try:
+            # Step 1: 拉取服务器列表（分页，始终全量 — 数据量小）
+            logger.info("开始同步服务器列表...")
+            all_servers = []
+            page = 1
+            limit = 100
 
-    async def _update_job(self, job_id: str, **fields):
-        """更新同步任务"""
-        col = get_collection("sync_jobs")
-        fields["finished_at"] = _now_iso()
-        await col.update_one({"_id": ObjectId(job_id)}, {"$set": fields})
+            while True:
+                resp = await self._post_async(
+                    "/stepsmanagement/monitor/queryTestingServers.action",
+                    data={"page": page, "limit": limit, "customerID": "", "salesReceipts": "", "orderID": "",
+                          "serverSN": "", "serverState": "", "models": "", "productModels": "", "testItemName": ""}
+                )
+                batch = resp.get("data", [])
+                all_servers.extend(batch)
+                servers_total = resp.get("total", 0) or resp.get("count", 0)
+                logger.info(f"Servers page {page}: {len(batch)} records")
+                if len(batch) < limit:
+                    break
+                page += 1
 
-    async def fetch_servers(self, page: int = 1, limit: int = 100) -> tuple[list[dict], int]:
-        """获取服务器列表"""
-        resp = await self._post(
-            "/stepsmanagement/monitor/queryTestingServers.action",
-            data={
-                "page": page,
-                "limit": limit,
-                "customerID": "",
-                "salesReceipts": "",
-                "orderID": ""
+            logger.info(f"Fetched {len(all_servers)} servers total")
+
+            # 增量模式：读取已有 last_test_time（upsert 前读，避免被覆盖后丢失）
+            servers_col = get_collection("sync_remote_servers")
+            existing_times: dict[str, str] = {}
+            if not full:
+                cursor = servers_col.find(
+                    {"server_sn": {"$in": [s.get("serverSN", "") for s in all_servers]}},
+                    {"server_sn": 1, "last_test_time": 1}
+                )
+                async for doc in cursor:
+                    t = doc.get("last_test_time")
+                    if t:
+                        existing_times[doc["server_sn"]] = t
+                logger.info(f"Incremental mode: {len(existing_times)} servers have prior sync data")
+
+            # Upsert 服务器（$set 不含 last_test_time，不会覆盖已有值）
+            sn_to_id: dict[str, str] = {}
+
+            for raw in all_servers:
+                record = self._to_server_record(raw)
+                result = await servers_col.update_one(
+                    {"server_sn": record["server_sn"]},
+                    {"$set": record},
+                    upsert=True
+                )
+                if result.upserted_id:
+                    servers_new += 1
+                    sn_to_id[record["server_sn"]] = str(result.upserted_id)
+                else:
+                    existing = await servers_col.find_one({"server_sn": record["server_sn"]})
+                    if existing:
+                        sn_to_id[record["server_sn"]] = str(existing["_id"])
+
+            self.servers_count = len(sn_to_id)
+            logger.info(f"Servers synced: {len(sn_to_id)} total, {servers_new} new")
+
+            # Step 2: 拉取每台服务器的测试详情（增量时利用 last_test_time 早停）
+            mode = "FULL" if full else "INCREMENTAL"
+            logger.info(f"[{mode}] Fetching test details for {len(sn_to_id)} servers...")
+            details_col = get_collection("sync_remote_test_details")
+
+            for sn, sid in sn_to_id.items():
+                try:
+                    since = None if full else existing_times.get(sn)
+                    details, new_max_time = await self._fetch_test_details(sn, since)
+                    if since and not details:
+                        skipped_servers += 1
+                        continue
+
+                    for detail in details:
+                        record = self._to_detail_record(sid, sn, detail)
+                        result = await details_col.update_one(
+                            {
+                                "server_id": sid,
+                                "detailed_flow": record["detailed_flow"],
+                                "test_time": record["test_time"]
+                            },
+                            {"$set": record},
+                            upsert=True
+                        )
+                        details_total += 1
+                        if result.upserted_id:
+                            details_new += 1
+
+                    self.details_count += len(details)
+
+                    # 更新 last_test_time
+                    if new_max_time:
+                        await servers_col.update_one(
+                            {"server_sn": sn},
+                            {"$set": {"last_test_time": new_max_time}}
+                        )
+
+                    logger.info(f"  {sn}: {len(details)} details" + (f" (since={since[:19]})" if since else ""))
+                except Exception as e:
+                    logger.error(f"Failed to sync details for {sn}: {e}")
+
+            logger.info(f"[{mode}] Sync complete: {servers_total} servers, {details_total} details ({details_new} new)"
+                        + (f", {skipped_servers} servers skipped" if skipped_servers else ""))
+            await self._save_job("success", servers_total, servers_new, details_total, details_new, "")
+            return {
+                "message": "同步成功",
+                "mode": "full" if full else "incremental",
+                "servers_total": servers_total,
+                "servers_new": servers_new,
+                "details_total": details_total,
+                "details_new": details_new,
+                "skipped_servers": skipped_servers,
             }
-        )
-        data = resp.get("data", [])
-        total = resp.get("total", 0) or resp.get("count", 0)
-        return data, total
 
-    async def fetch_test_details(self, server_sn: str) -> list[dict]:
-        """获取某服务器的测试详情（全量拉取）"""
+        except Exception as e:
+            logger.error(f"Sync failed: {e}")
+            await self._save_job("failed", servers_total, servers_new, details_total, details_new, str(e))
+            raise
+        finally:
+            self._is_running = False
+
+    async def _fetch_test_details(self, server_sn: str, since: Optional[str] = None) -> tuple[list[dict], Optional[str]]:
+        """获取某服务器的测试详情，返回 (新记录列表, 最新test_time)。
+        若 since 不为空，遇到 test_time <= since 的记录即停止（假设 API 按 test_time 倒序返回）。
+        """
         all_data = []
         start = 0
         limit = 500
+        max_time: Optional[str] = None
 
         while True:
-            resp = await self._post(
+            resp = await self._post_async(
                 "/stepsmanagement/resultInfo/queryTestList.action",
-                data={
-                    "start": start,
-                    "limit": limit,
-                    "serverSN": server_sn,
-                    "customerID": ""
-                }
+                data={"start": start, "limit": limit, "serverSN": server_sn, "customerID": ""}
             )
             batch = resp.get("data", [])
-            all_data.extend(batch)
+            if not batch:
+                break
+
+            # 跟踪最大 test_time
+            for d in batch:
+                t = d.get("testTime")
+                if t and (max_time is None or t > max_time):
+                    max_time = t
+
+            if since:
+                new_batch = [d for d in batch if (d.get("testTime") or "") > since]
+                all_data.extend(new_batch)
+                # 如果过滤后数量少于原始批次，说明已越过水位线，停止翻页
+                if len(new_batch) < len(batch):
+                    break
+            else:
+                all_data.extend(batch)
+
             if len(batch) < limit:
                 break
             start += limit
 
-        return all_data
+        return all_data, max_time
 
-    def _parse_datetime(self, value: Optional[str]) -> Optional[str]:
-        """解析日期时间字符串，返回 ISO 格式字符串"""
-        if not value:
-            return None
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).isoformat()
-        except ValueError:
-            try:
-                return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").isoformat()
-            except ValueError:
-                return None
+    async def _save_job(self, status: str, servers_total: int, servers_new: int,
+                        details_total: int, details_new: int, error_message: str):
+        col = get_collection("sync_jobs")
+        await col.insert_one({
+            "status": status,
+            "started_at": _now_iso(),
+            "servers_total": servers_total,
+            "servers_new": servers_new,
+            "details_total": details_total,
+            "details_new": details_new,
+            "error_message": error_message,
+        })
+
+    async def get_jobs(self, page: int = 1, limit: int = 5) -> dict:
+        col = get_collection("sync_jobs")
+        total = await col.count_documents({})
+        skip = (page - 1) * limit
+        cursor = col.find({}).sort("started_at", -1).skip(skip).limit(limit)
+        items = await cursor.to_list(length=limit)
+        for item in items:
+            item["id"] = str(item.pop("_id"))
+        return {"items": items, "total": total, "page": page, "limit": limit}
 
     def _to_server_record(self, raw: dict) -> dict:
-        """将 API 返回的服务器数据转为数据库记录"""
         def _str(v, default=""):
             if v is None:
                 return default
             if isinstance(v, (dict, list)):
                 return str(v)
             return str(v)
-
-        def _int(v, default=0):
-            try:
-                return int(v or default)
-            except (ValueError, TypeError):
-                return default
 
         return {
             "server_sn": _str(raw.get("serverSN")),
@@ -169,7 +286,7 @@ class SyncService:
             "bmc_ip6": _str(raw.get("bmcIP6")),
             "position": _str(raw.get("position")),
             "logical": _str(raw.get("logical")),
-            "alarm": _int(raw.get("alarm")),
+            "alarm": int(raw.get("alarm") or 0),
             "server_state": _str(raw.get("serverState")),
             "test_items": _str(raw.get("testItems")),
             "next_item": _str(raw.get("nextItem")),
@@ -184,158 +301,38 @@ class SyncService:
             "synced_at": _now_iso()
         }
 
-    def _to_detail_records(self, server_id: str, server_sn: str, raw_list: list[dict]) -> list[dict]:
-        """将 API 返回的测试详情数据转为数据库记录"""
-        records = []
-        for raw in raw_list:
-            records.append({
-                "server_id": server_id,
-                "server_sn": server_sn,
-                "big_flow": raw.get("bigFlow", ""),
-                "detailed_flow": raw.get("detailedFlow", ""),
-                "log_path": raw.get("logPath", ""),
-                "decision": raw.get("decision", ""),
-                "server_test_result": raw.get("serverTestResult", ""),
-                "test_time": self._parse_datetime(raw.get("testTime")),
-                "mes_record": raw.get("mesRecord", ""),
-                "fault_type1": raw.get("faultType1", ""),
-                "fault_type2": raw.get("faultType2", ""),
-                "fault_type3": raw.get("faultType3", ""),
-                "mes_remarks": raw.get("mesRemarks", ""),
-                "mes_time": self._parse_datetime(raw.get("mesTime")),
-                "synced_at": _now_iso()
-            })
-        return records
+    def _to_detail_record(self, server_id: str, server_sn: str, raw: dict) -> dict:
+        return {
+            "server_id": server_id,
+            "server_sn": server_sn,
+            "big_flow": raw.get("bigFlow", ""),
+            "detailed_flow": raw.get("detailedFlow", ""),
+            "log_path": raw.get("log", ""),
+            "decision": raw.get("decision", ""),
+            "server_test_result": raw.get("serverTestResult", ""),
+            "test_time": self._parse_datetime(raw.get("testTime")),
+            "mes_record": raw.get("mesRecord", ""),
+            "fault_type1": raw.get("faultType1", ""),
+            "fault_type2": raw.get("faultType2", ""),
+            "fault_type3": raw.get("faultType3", ""),
+            "mes_remarks": raw.get("mesRemarks", ""),
+            "mes_time": self._parse_datetime(raw.get("mesTime")),
+            "synced_at": _now_iso()
+        }
 
-    async def sync_all(self, triggered_by: str = "manual") -> dict:
-        """执行全量同步（带整体超时保护）"""
-        if self._sync_lock.locked():
-            running = await self._get_running_job()
-            if running:
-                return {"job_id": str(running["_id"]), "message": "同步任务已在运行中"}
-
+    @staticmethod
+    def _parse_datetime(value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
         try:
-            return await asyncio.wait_for(self._do_sync(), timeout=self._sync_timeout)
-        except asyncio.TimeoutError:
-            logger.error("同步任务超时")
-            return {"job_id": "", "message": "同步任务超时"}
-        except Exception:
-            logger.exception("同步任务失败")
-            raise
-
-    async def _do_sync(self) -> dict:
-        """同步内部实现"""
-        async with self._sync_lock:
-            job_id = await self._create_job()
-            servers_total = 0
-            servers_new = 0
-            details_total = 0
-            details_new = 0
-            errors = []
-
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).isoformat()
+        except ValueError:
             try:
-                # Step 1: 拉取服务器列表（分页）
-                logger.info("开始同步服务器列表...")
-                all_servers = []
-                page = 1
-                limit = 100
+                return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").isoformat()
+            except ValueError:
+                return None
 
-                while True:
-                    data, total = await self.fetch_servers(page, limit)
-                    all_servers.extend(data)
-                    servers_total = total
-                    if len(data) < limit:
-                        break
-                    page += 1
-
-                # Upsert 服务器数据
-                servers_col = get_collection("sync_remote_servers")
-                sn_to_id: dict[str, str] = {}
-
-                for s in all_servers:
-                    record = self._to_server_record(s)
-                    result = await servers_col.update_one(
-                        {"server_sn": record["server_sn"]},
-                        {"$set": record},
-                        upsert=True
-                    )
-                    if result.upserted_id:
-                        servers_new += 1
-                        sn_to_id[record["server_sn"]] = str(result.upserted_id)
-                    else:
-                        # 获取已有记录 ID
-                        existing = await servers_col.find_one({"server_sn": record["server_sn"]})
-                        if existing:
-                            sn_to_id[record["server_sn"]] = str(existing["_id"])
-
-                logger.info(f"同步了 {len(sn_to_id)} 台服务器")
-
-                # Step 2: 并发拉取每台服务器的测试详情
-                semaphore = asyncio.Semaphore(self.settings.sync_max_concurrency)
-                details_col = get_collection("sync_remote_test_details")
-
-                async def sync_one_server(sn: str, sid: str):
-                    async with semaphore:
-                        try:
-                            details = await self.fetch_test_details(sn)
-                            new_count = 0
-                            if details:
-                                for detail in details:
-                                    record = self._to_detail_records(sid, sn, [detail])[0]
-                                    result = await details_col.update_one(
-                                        {
-                                            "server_id": sid,
-                                            "detailed_flow": record["detailed_flow"],
-                                            "test_time": record["test_time"]
-                                        },
-                                        {"$set": record},
-                                        upsert=True
-                                    )
-                                    if result.upserted_id:
-                                        new_count += 1
-                            return len(details), new_count
-                        except Exception as e:
-                            logger.error(f"同步服务器 {sn} 测试详情失败: {e}")
-                            errors.append(f"{sn}: {str(e)}")
-                            return 0, 0
-
-                tasks = [sync_one_server(sn, sid) for sn, sid in sn_to_id.items()]
-                results = await asyncio.gather(*tasks)
-
-                for r in results:
-                    details_total += r[0]
-                    details_new += r[1]
-
-                # 更新任务状态为成功
-                error_msg = "; ".join(errors) if errors else ""
-                await self._update_job(
-                    job_id,
-                    status="success",
-                    servers_total=servers_total,
-                    servers_new=servers_new,
-                    details_total=details_total,
-                    details_new=details_new,
-                    error_message=error_msg
-                )
-
-                logger.info(f"同步完成: {servers_total} 台服务器, {details_total} 条测试详情")
-                return {"job_id": job_id, "message": "同步成功"}
-
-            except Exception as e:
-                logger.error(f"同步失败: {e}")
-                error_msg = str(e)
-                if errors:
-                    error_msg += "; 另有错误: " + "; ".join(errors)
-                await self._update_job(
-                    job_id,
-                    status="failed",
-                    servers_total=servers_total,
-                    servers_new=servers_new,
-                    details_total=details_total,
-                    details_new=details_new,
-                    error_message=error_msg
-                )
-                raise
+    # ── 查询方法 ──
 
     async def get_servers(
         self,
@@ -344,7 +341,6 @@ class SyncService:
         page: int = 1,
         limit: int = 20
     ) -> dict:
-        """查询服务器列表"""
         col = get_collection("sync_remote_servers")
         query = {}
         if search_sn:
@@ -354,70 +350,28 @@ class SyncService:
 
         total = await col.count_documents(query)
         skip = (page - 1) * limit
-
         cursor = col.find(query).sort("synced_at", -1).skip(skip).limit(limit)
         items = await cursor.to_list(length=limit)
 
-        # 转换 ObjectId 为字符串
         for item in items:
             item["id"] = str(item.pop("_id"))
 
-        return {
-            "items": items,
-            "total": total,
-            "page": page,
-            "limit": limit
-        }
+        return {"items": items, "total": total, "page": page, "limit": limit}
 
     async def get_test_details(self, server_sn: str, page: int = 1, limit: int = 20) -> dict:
-        """查询某服务器的测试详情"""
         col = get_collection("sync_remote_test_details")
         query = {"server_sn": server_sn}
         total = await col.count_documents(query)
         skip = (page - 1) * limit
-
         cursor = col.find(query).sort("test_time", -1).skip(skip).limit(limit)
         items = await cursor.to_list(length=limit)
 
         for item in items:
             item["id"] = str(item.pop("_id"))
 
-        return {
-            "items": items,
-            "total": total,
-            "page": page,
-            "limit": limit
-        }
-
-    async def get_jobs(self, page: int = 1, limit: int = 20) -> dict:
-        """查询同步历史"""
-        col = get_collection("sync_jobs")
-        total = await col.count_documents({})
-        skip = (page - 1) * limit
-
-        cursor = col.find({}).sort("started_at", -1).skip(skip).limit(limit)
-        items = await cursor.to_list(length=limit)
-
-        for item in items:
-            item["id"] = str(item.pop("_id"))
-
-        return {
-            "items": items,
-            "total": total,
-            "page": page,
-            "limit": limit
-        }
-
-    async def get_latest_job_status(self) -> Optional[dict]:
-        """获取最新同步状态"""
-        col = get_collection("sync_jobs")
-        item = await col.find_one({}, sort=[("started_at", -1)])
-        if item:
-            item["id"] = str(item.pop("_id"))
-        return item
+        return {"items": items, "total": total, "page": page, "limit": limit}
 
 
-# 单例
 _sync_service: Optional[SyncService] = None
 
 

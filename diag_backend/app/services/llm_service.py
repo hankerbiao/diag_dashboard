@@ -1,6 +1,7 @@
 from openai import AsyncOpenAI
 from ..core.config import get_settings
 from typing import Optional
+import json
 
 settings = get_settings()
 

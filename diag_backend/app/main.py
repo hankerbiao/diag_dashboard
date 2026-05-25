@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from .routers import diagnosis, error_logs, settings as settings_router, sync, auth
+from .routers import analytics, diagnosis, error_logs, settings as settings_router, sync, auth
 from .core.config import get_settings
 
 app_settings = get_settings()
@@ -71,6 +71,7 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(diagnosis.router, prefix="/api")
 app.include_router(error_logs.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
+app.include_router(analytics.router, prefix="/api")
 app.include_router(sync.router, prefix="/api")
 
 

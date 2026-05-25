@@ -1,11 +1,14 @@
 """
 认证 API - 注册/登录
 """
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..models.auth import LoginRequest, RegisterRequest, AuthResponse, UserResponse
 from ..core.auth import hash_password, verify_password, create_access_token, get_current_user
 from ..core.mongodb import get_collection
+from ..core.config import get_settings
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 
@@ -63,7 +66,14 @@ async def login(request: LoginRequest):
 
     # 生成 token
     user_id = str(user["_id"])
-    access_token = create_access_token(user_id, request.email)
+
+    # 如果选择记住我，token 有效期设为 1 天
+    if request.remember:
+        expires_delta = timedelta(days=1)
+    else:
+        expires_delta = None  # 使用默认配置
+
+    access_token = create_access_token(user_id, request.email, expires_delta)
 
     return AuthResponse(
         access_token=access_token,

@@ -18,6 +18,9 @@ async def connect_mongodb():
     _database = _client[settings.mongodb_db_name]
     # 验证连接
     await _client.admin.command("ping")
+    # 自动创建索引
+    from .mongodb_indexes import ensure_indexes
+    await ensure_indexes(_database)
     print(f"Connected to MongoDB: {settings.mongodb_uri}/{settings.mongodb_db_name}")
 
 
