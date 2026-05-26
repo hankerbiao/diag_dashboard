@@ -21,13 +21,16 @@ class Settings(BaseSettings):
     port: int = 8000
     debug: bool = False
 
-    # Sync Module - 三方数据同步配置
-    sync_api_base_url: str = "http://10.2.68.103"
-    sync_api_timeout: int = 30                # 单次请求超时秒数
-    sync_max_concurrency: int = 5             # 同时请求的最大并发数
-    sync_max_retries: int = 3                 # 单次请求最大重试次数
-    sync_request_delay: float = 0.3           # 每次请求后延迟秒数（避免速率限制）
-    sync_min_interval_minutes: int = 5        # 两次全量同步的最小间隔分钟数
+    # Factory Config - 厂区配置 YAML 文件路径
+    factories_yaml_path: str = ""
+
+    # Knowledge Base - 文件存储路径
+    knowledge_base_storage_path: str = "./data/knowledge_base"
+
+    # RAGFlow - 知识库引擎
+    ragflow_api_url: str = ""
+    ragflow_api_key: str = ""
+    ragflow_default_dataset: str = "weaveeye-knowledge-base"
 
     class Config:
         env_file = ".env"

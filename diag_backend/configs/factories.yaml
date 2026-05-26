@@ -1,0 +1,27 @@
+# 厂区配置 - 数据同步目标厂区
+# 独立同步脚本 (scripts/sync_data.py) 和后端启动时均读取此文件
+factories:
+  - factory_id: kunshan
+    name: 昆山厂区
+    base_url: http://10.8.102.88
+    log_base_url: http://10.8.102.89/log
+
+  - factory_id: tianjin2
+    name: 天津二期厂区
+    base_url: http://10.2.68.103
+    log_base_url: http://10.2.68.104
+
+  - factory_id: tianjin3
+    name: 天津三期厂区
+    base_url: http://10.2.208.214
+    log_base_url: http://10.2.208.211/log
+
+  - factory_id: tongxiang
+    name: 桐乡厂区
+    base_url: http://10.30.14.23
+    log_base_url: ftp://10.30.14.12
+
+  - factory_id: datong
+    name: 大同厂区
+    base_url: http://10.39.102.32
+    log_base_url: ftp://10.39.102.31

@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from .routers import analytics, diagnosis, error_logs, settings as settings_router, sync, auth
+from .routers import analytics, diagnosis, error_logs, factories, knowledge_base, settings as settings_router, sync, auth
 from .core.config import get_settings
 
 app_settings = get_settings()
@@ -15,15 +15,16 @@ async def lifespan(app: FastAPI):
     from .core.mongodb import connect_mongodb, close_mongodb
     await connect_mongodb()
 
+    # startup: 启动分析看板快照调度器
+    from .services.analytics_service import get_analytics_service
+    analytics_service = get_analytics_service()
+    analytics_service.start_scheduler()
+
     yield
 
-    # shutdown: 关闭 MongoDB 连接
+    # shutdown: 停止调度器、关闭连接
+    await analytics_service.stop_scheduler()
     await close_mongodb()
-
-    # shutdown: 释放 HTTP 连接池
-    from .services.sync_service import get_sync_service
-    service = get_sync_service()
-    await service.close()
 
 
 app = FastAPI(
@@ -73,6 +74,8 @@ app.include_router(error_logs.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
 app.include_router(analytics.router, prefix="/api")
 app.include_router(sync.router, prefix="/api")
+app.include_router(factories.router, prefix="/api")
+app.include_router(knowledge_base.router, prefix="/api")
 
 
 # 根路径

@@ -73,8 +73,6 @@ class LLMService:
             {"role": "user", "content": prompt}
         ])
 
-        # 解析 JSON 响应
-        import json
         try:
             return json.loads(response)
         except:
@@ -114,7 +112,6 @@ class LLMService:
             {"role": "user", "content": prompt}
         ])
 
-        import json
         try:
             return json.loads(response)
         except:

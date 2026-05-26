@@ -1,16 +1,18 @@
 import { useState } from 'react';
 import { Bot, ChevronUp, Paperclip, Mic } from 'lucide-react';
-import type { AppSettings, FactoryLocation } from '../../types';
+import type { AppSettings } from '../../types';
+import type { FactorySite } from '../../api/fastapi';
 import DiagnosisInput from './DiagnosisInput';
 import DiagnosisResult from './DiagnosisResult';
 import ReferenceData from './ReferenceData';
 
 interface DiagnosisTabProps {
   settings: AppSettings;
-  factory: FactoryLocation;
+  factory: string;
+  factorySites: FactorySite[];
 }
 
-export default function DiagnosisTab({ settings, factory }: DiagnosisTabProps) {
+export default function DiagnosisTab({ settings, factory, factorySites }: DiagnosisTabProps) {
   const [sn, setSn] = useState('CN-0M3821-72911-39A-0021');
 
   return (
@@ -22,7 +24,7 @@ export default function DiagnosisTab({ settings, factory }: DiagnosisTabProps) {
 
       <div className="flex-1 flex min-h-0">
         <DiagnosisResult sn={sn} />
-        <ReferenceData factory={factory} />
+        <ReferenceData factory={factory} factorySites={factorySites} />
       </div>
 
       <div

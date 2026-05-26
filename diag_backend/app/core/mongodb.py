@@ -18,9 +18,10 @@ async def connect_mongodb():
     _database = _client[settings.mongodb_db_name]
     # 验证连接
     await _client.admin.command("ping")
-    # 自动创建索引
-    from .mongodb_indexes import ensure_indexes
+    # 自动创建索引和种子数据
+    from .mongodb_indexes import ensure_indexes, seed_default_data
     await ensure_indexes(_database)
+    await seed_default_data(_database)
     print(f"Connected to MongoDB: {settings.mongodb_uri}/{settings.mongodb_db_name}")
 
 

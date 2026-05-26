@@ -14,15 +14,6 @@ class ErrorLogResponse(BaseModel):
     fail_details: Optional[str]
 
 
-class DeviceResponse(BaseModel):
-    id: str
-    sn: str
-    model: str
-    factory: str
-    batch: Optional[str]
-    production_date: Optional[datetime]
-
-
 class ReferenceLog(BaseModel):
     id: str
     source: str
@@ -96,48 +87,15 @@ class ApiResponse(BaseModel):
     message: Optional[str] = None
 
 
-# ============================================================
-# Sync Module 响应模型
-# ============================================================
-
-class SyncServerResponse(BaseModel):
+class KnowledgeDocResponse(BaseModel):
     id: str
-    server_sn: str
-    order_id: str
-    model: str
-    product_models: str
-    host_ip: str
-    server_state: str
-    test_items: str
-    customer_name: str
-    alarm: int
-    synced_at: datetime
-
-
-class SyncTestDetailResponse(BaseModel):
-    id: str
-    server_sn: str
-    big_flow: str
-    detailed_flow: str
-    server_test_result: str
-    test_time: datetime
-    decision: str
-    fault_type1: str
-    fault_type2: str
-    fault_type3: str
-    log_path: str
-
-
-class SyncJobResponse(BaseModel):
-    id: str
-    status: str  # running / success / failed
-    started_at: datetime
-    finished_at: Optional[datetime]
-    servers_total: int
-    servers_new: int
-    details_total: int
-    details_new: int
-    error_message: str
+    title: str
+    description: str = ""
+    format: str = ""
+    size_bytes: int = 0
+    status: str = "ready"
+    tags: list[str] = []
+    uploaded_at: Optional[str] = None
 
 
 class PaginatedResponse(BaseModel):
@@ -145,3 +103,5 @@ class PaginatedResponse(BaseModel):
     total: int
     page: int
     limit: int
+
+

@@ -24,14 +24,11 @@ class TestSettings:
         assert settings.port == 9000
         assert settings.debug is True
 
-    def test_sync_config_defaults(self):
-        """测试同步配置默认值"""
+    def test_factory_config_defaults(self):
+        """测试厂区配置默认值"""
         settings = Settings()
 
-        assert settings.sync_api_base_url == "http://10.2.68.103"
-        assert settings.sync_api_timeout == 30
-        assert settings.sync_max_concurrency == 5
-        assert settings.sync_max_retries == 3
+        assert settings.factories_yaml_path == ""
 
     def test_jwt_algorithm(self):
         """测试 JWT 算法"""

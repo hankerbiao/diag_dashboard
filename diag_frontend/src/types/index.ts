@@ -1,5 +1,5 @@
-export type NavigationTab = 'diagnosis' | 'error_logs' | 'settings';
-export type FactoryLocation = '天津' | '天津三期' | '盘锦一期' | '盘锦二期' | '昆山' | '太原' | '安阳' | '桐乡' | '青岛' | '大同';
+export type NavigationTab = 'diagnosis' | 'error_logs' | 'knowledge_base' | 'settings';
+export type FactoryLocation = string;
 
 export interface AppSettings {
   aiApiUrl: string;
@@ -40,10 +40,6 @@ export interface ErrorLogRow {
   mesRecord: string;
 }
 
-export const FACTORY_LOCATIONS: FactoryLocation[] = [
-  '天津', '天津三期', '盘锦一期', '盘锦二期', '昆山', '太原', '安阳', '桐乡', '青岛', '大同'
-];
-
 export const DEFAULT_SETTINGS: AppSettings = {
   aiApiUrl: 'https://api.openai.com/v1',
   aiApiKey: '',
@@ -51,3 +47,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   aiTemperature: 0.7,
   activeKBs: ['MES', 'SIMS', 'Case Library']
 };
+
+export type {
+  FaultCategoryItem,
+  YieldTrendItem,
+  StationFailureItem,
+  DecisionDistributionItem,
+  ModelDefectItem,
+  DashboardInsights,
+} from '../api/fastapi';

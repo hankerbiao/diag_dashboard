@@ -1,11 +1,13 @@
 import { Database, Terminal, Network } from 'lucide-react';
-import type { FactoryLocation } from '../../types';
+import type { FactorySite } from '../../api/fastapi';
 
 interface ReferenceDataProps {
-  factory: FactoryLocation;
+  factory: string;
+  factorySites: FactorySite[];
 }
 
-export default function ReferenceData({ factory }: ReferenceDataProps) {
+export default function ReferenceData({ factory, factorySites }: ReferenceDataProps) {
+  const factoryName = factorySites.find((f) => f.factory_id === factory)?.name ?? factory;
   return (
     <div
       className="w-[45%] flex flex-col shrink-0 shadow-inner overflow-hidden min-h-0"
@@ -21,7 +23,7 @@ export default function ReferenceData({ factory }: ReferenceDataProps) {
       >
         <h2 className="text-[13px] font-bold flex items-center gap-2">
           <Database className="w-4 h-4" style={{ color: 'var(--color-accent)' }} />
-          结构化参考数据源支撑 ({factory}厂区)
+          结构化参考数据源支撑 ({factoryName}厂区)
         </h2>
       </div>
 

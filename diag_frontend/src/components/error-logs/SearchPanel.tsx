@@ -1,25 +1,28 @@
 import { LayoutDashboard } from 'lucide-react';
-import type { FactoryLocation } from '../../types';
+import type { FactorySite } from '../../api/fastapi';
 
 interface SearchPanelProps {
-  factory: FactoryLocation;
+  factory: string;
+  factorySites: FactorySite[];
   sn: string;
   productModels: string;
   onSnChange: (value: string) => void;
   onProductModelsChange: (value: string) => void;
-  onReset: () => void;
   onSearch: () => void;
+  onReset: () => void;
 }
 
 export default function SearchPanel({
   factory,
+  factorySites,
   sn,
   productModels,
   onSnChange,
   onProductModelsChange,
-  onReset,
   onSearch,
+  onReset,
 }: SearchPanelProps) {
+  const factoryName = factorySites.find((f) => f.factory_id === factory)?.name ?? factory;
   return (
     <div
       className="m-4 p-5 rounded-lg flex-none border"
@@ -41,7 +44,7 @@ export default function SearchPanel({
           }}
         >
           <LayoutDashboard className="w-3.5 h-3.5" />
-          {factory}厂区数据视图
+          {factoryName}厂区数据视图
         </div>
       </div>
 
@@ -58,7 +61,6 @@ export default function SearchPanel({
             value={sn}
             onChange={(e) => onSnChange(e.target.value)}
             placeholder="输入 SN 模糊搜索"
-            onKeyDown={(e) => e.key === 'Enter' && onSearch()}
             className="h-9 border rounded-md px-3 text-[13px] outline-none transition-all font-mono shadow-sm"
             style={{
               borderColor: 'var(--color-border)',
@@ -80,7 +82,6 @@ export default function SearchPanel({
             value={productModels}
             onChange={(e) => onProductModelsChange(e.target.value)}
             placeholder="输入产品型号"
-            onKeyDown={(e) => e.key === 'Enter' && onSearch()}
             className="h-9 border rounded-md px-3 text-[13px] outline-none transition-all shadow-sm"
             style={{
               borderColor: 'var(--color-border)',
@@ -89,6 +90,14 @@ export default function SearchPanel({
             }}
           />
         </div>
+
+        <button
+          onClick={onSearch}
+          className="h-9 px-6 border rounded-md text-[13px] font-bold transition-colors shadow-sm text-white border-0"
+          style={{ backgroundColor: 'var(--color-accent)' }}
+        >
+          搜索
+        </button>
 
         <button
           onClick={onReset}
@@ -100,17 +109,6 @@ export default function SearchPanel({
           }}
         >
           重置
-        </button>
-
-        <button
-          onClick={onSearch}
-          className="h-9 px-6 text-white rounded-md text-[13px] font-medium shadow-md transition-all active:scale-95 border"
-          style={{
-            backgroundColor: 'var(--color-accent)',
-            borderColor: 'var(--color-accent-hover)',
-          }}
-        >
-          深度检索
         </button>
       </div>
     </div>

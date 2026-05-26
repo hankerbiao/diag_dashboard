@@ -88,18 +88,17 @@ async def analyze_error_log(
     3. 调用 LLM 分析
     """
     try:
-        # 1. 获取异常日志 (mock)
-        error_log = {
-            "id": error_log_id,
-            "sn": "6102263004319419",
-            "test_item": "Stress Check",
-            "test_time": "2026-05-14 21:27:48",
-            "fail_details": "Stress Check failed, error code 0x822"
-        }
+        # 1. 获取异常日志
+        error_log = await knowledge_graph.get_error_log_by_id(error_log_id)
+        if not error_log:
+            return ApiResponse(
+                success=False,
+                error="未找到异常日志"
+            )
 
         # 2. 检索相似案例
         similar_cases = await knowledge_graph.find_similar_cases(
-            error_description=error_log["fail_details"]
+            error_description=error_log.get("fail_details", "")
         )
 
         # 3. 调用 LLM 分析

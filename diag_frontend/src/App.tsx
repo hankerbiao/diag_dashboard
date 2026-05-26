@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { NavigationTab, AppSettings, FactoryLocation } from './types';
+import { useState, useEffect } from 'react';
+import type { NavigationTab, AppSettings } from './types';
 import { DEFAULT_SETTINGS } from './types';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { AuthProvider } from './contexts/AuthContext';
@@ -10,12 +10,31 @@ import Footer from './components/layout/Footer';
 import DiagnosisTab from './components/diagnosis/DiagnosisTab';
 import ErrorLogsTab from './components/error-logs/ErrorLogsTab';
 import SettingsTab from './components/settings/SettingsTab';
+import KnowledgeBaseTab from './components/knowledge-base/KnowledgeBaseTab';
+import { analyticsApi, factoryApi, FactorySite } from './api/fastapi';
 
 function AppContent() {
   const { theme } = useTheme();
   const [activeTab, setActiveTab] = useState<NavigationTab>('diagnosis');
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
-  const [factory, setFactory] = useState<FactoryLocation>('天津');
+  const [factorySites, setFactorySites] = useState<FactorySite[]>([]);
+  const [factory, setFactory] = useState('');
+
+  // 加载厂区列表，并预热分析看板缓存
+  useEffect(() => {
+    factoryApi.list().then((resp) => {
+      if (resp.success && resp.data && resp.data.length > 0) {
+        setFactorySites(resp.data);
+        const firstFactory = resp.data[0].factory_id;
+        setFactory(firstFactory);
+        // 预热分析看板（带上厂区ID）
+        const trends = ['day', 'week', 'month'] as const;
+        trends.forEach((trend) => {
+          analyticsApi.getInsights({ factory_id: firstFactory, days: 30, trend }).catch(() => {});
+        });
+      }
+    });
+  }, []);
 
   return (
     <div
@@ -33,6 +52,7 @@ function AppContent() {
         <Header
           activeTab={activeTab}
           factory={factory}
+          factories={factorySites}
           onFactoryChange={setFactory}
         />
 
@@ -40,8 +60,9 @@ function AppContent() {
           className="flex-1 flex flex-col min-h-0 relative"
           style={{ backgroundColor: 'var(--color-bg-primary)' }}
         >
-          {activeTab === 'diagnosis' && <DiagnosisTab settings={settings} factory={factory} />}
-          {activeTab === 'error_logs' && <ErrorLogsTab factory={factory} />}
+          {activeTab === 'diagnosis' && <DiagnosisTab settings={settings} factory={factory} factorySites={factorySites} />}
+          {activeTab === 'error_logs' && <ErrorLogsTab factory={factory} factorySites={factorySites} />}
+          {activeTab === 'knowledge_base' && <KnowledgeBaseTab />}
           {activeTab === 'settings' && <SettingsTab settings={settings} setSettings={setSettings} />}
         </div>
 

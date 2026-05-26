@@ -1,18 +1,20 @@
 import { LogIn, LogOut } from 'lucide-react';
-import type { NavigationTab, FactoryLocation } from '../../types';
-import { FACTORY_LOCATIONS } from '../../types';
+import type { NavigationTab } from '../../types';
+import type { FactorySite } from '../../api/fastapi';
 import ThemeToggle from '../common/ThemeToggle';
 import { useAuth } from '../../contexts/AuthContext';
 
 interface HeaderProps {
   activeTab: NavigationTab;
-  factory: FactoryLocation;
-  onFactoryChange: (factory: FactoryLocation) => void;
+  factory: string;
+  factories: FactorySite[];
+  onFactoryChange: (factoryId: string) => void;
 }
 
 const TAB_TITLES: Record<NavigationTab, string> = {
   diagnosis: '单机 SN 深度诊断',
   error_logs: '批量测试异常看板',
+  knowledge_base: '知识库管理',
   settings: '系统管理与 AI 引擎配置',
 };
 
@@ -21,7 +23,7 @@ function getInitials(email: string): string {
   return name.slice(0, 2).toUpperCase();
 }
 
-export default function Header({ activeTab, factory, onFactoryChange }: HeaderProps) {
+export default function Header({ activeTab, factory, factories, onFactoryChange }: HeaderProps) {
   const { user, signOut } = useAuth();
 
   return (
@@ -54,7 +56,7 @@ export default function Header({ activeTab, factory, onFactoryChange }: HeaderPr
           </span>
           <select
             value={factory}
-            onChange={(e) => onFactoryChange(e.target.value as FactoryLocation)}
+            onChange={(e) => onFactoryChange(e.target.value)}
             className="h-7 px-2 rounded shadow-sm outline-none transition-colors font-bold cursor-pointer appearance-none pr-8 border"
             style={{
               backgroundColor: 'var(--color-bg-secondary)',
@@ -66,9 +68,10 @@ export default function Header({ activeTab, factory, onFactoryChange }: HeaderPr
               backgroundSize: '1em 1em',
             }}
           >
-            {FACTORY_LOCATIONS.map((loc) => (
-              <option key={loc} value={loc}>
-                {loc}
+            {factories.length === 0 && <option value="">-- 加载中 --</option>}
+            {factories.map((f) => (
+              <option key={f.factory_id} value={f.factory_id}>
+                {f.name}
               </option>
             ))}
           </select>

@@ -10,17 +10,11 @@ import {
 } from 'recharts';
 import { trendDataDaily, trendDataWeekly, trendDataMonthly } from '../../../data/mockData';
 import { Activity } from 'lucide-react';
-import { useTheme } from '../../../contexts/ThemeContext';
+import { useChartTheme } from '../../../hooks/useChartTheme';
 
 export default function TrendChart() {
   const [timeRange, setTimeRange] = useState<'day' | 'week' | 'month'>('day');
-  const { theme } = useTheme();
-
-  const isDark = theme === 'dark';
-  const textColor = isDark ? '#94a3b8' : '#64748b';
-  const gridColor = isDark ? '#334155' : '#f1f5f9';
-  const bgColor = isDark ? '#1e293b' : '#ffffff';
-  const borderColor = isDark ? '#334155' : '#e2e8f0';
+  const { isDark, textColor, gridColor, bgColor, borderColor, accentColor } = useChartTheme();
 
   const currentTrendData =
     timeRange === 'day'
@@ -61,7 +55,7 @@ export default function TrendChart() {
                 timeRange === range
                   ? {
                       backgroundColor: bgColor,
-                      color: '#4f46e5',
+                      color: accentColor,
                       border: `1px solid ${borderColor}`,
                       boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
                     }
@@ -81,8 +75,8 @@ export default function TrendChart() {
           <AreaChart data={currentTrendData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
             <defs>
               <linearGradient id="colorIssues" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.3} />
-                <stop offset="95%" stopColor="#4f46e5" stopOpacity={0} />
+                <stop offset="5%" stopColor={accentColor} stopOpacity={0.3} />
+                <stop offset="95%" stopColor={accentColor} stopOpacity={0} />
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} />
@@ -96,17 +90,17 @@ export default function TrendChart() {
                 fontSize: '12px',
                 backgroundColor: bgColor,
               }}
-              itemStyle={{ color: '#4f46e5', fontWeight: 'bold' }}
+              itemStyle={{ color: accentColor, fontWeight: 'bold' }}
             />
             <Area
               type="monotone"
               dataKey="issues"
               name="阻断数量"
-              stroke="#4f46e5"
+              stroke={accentColor}
               strokeWidth={3}
               fillOpacity={1}
               fill="url(#colorIssues)"
-              activeDot={{ r: 6, strokeWidth: 0, fill: '#4f46e5' }}
+              activeDot={{ r: 6, strokeWidth: 0, fill: accentColor }}
             />
           </AreaChart>
         </ResponsiveContainer>

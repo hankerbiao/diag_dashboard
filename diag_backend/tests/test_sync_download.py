@@ -43,7 +43,7 @@ async def post(client: httpx.AsyncClient, path: str, data: dict) -> dict:
     return result
 
 
-async def test_fetch_servers(client: httpx.AsyncClient):
+async def _fetch_servers(client: httpx.AsyncClient):
     """测试拉取服务器列表"""
     print("\n>>> Step 1: 拉取服务器列表")
     all_data = []
@@ -70,7 +70,7 @@ async def test_fetch_servers(client: httpx.AsyncClient):
     return all_data
 
 
-async def test_fetch_details(client: httpx.AsyncClient, server_sn: str):
+async def _fetch_details(client: httpx.AsyncClient, server_sn: str):
     """测试拉取某服务器的测试详情"""
     print(f"\n>>> Step 2: 拉取测试详情 (server={server_sn})")
     all_data = []
@@ -105,13 +105,13 @@ async def main():
         cookies=COOKIES,
     ) as client:
         # Step 1: 拉服务器
-        servers = await test_fetch_servers(client)
+        servers = await _fetch_servers(client)
 
         # Step 2: 拉第一台服务器的详情
         if servers:
             first_sn = servers[0].get("serverSN", "")
             if first_sn:
-                await test_fetch_details(client, first_sn)
+                await _fetch_details(client, first_sn)
 
     print(f"\n{'='*60}")
     print("测试完成")

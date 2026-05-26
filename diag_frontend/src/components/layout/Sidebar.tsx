@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bot, Search, LayoutDashboard, Settings } from 'lucide-react';
+import { Bot, Search, LayoutDashboard, Library, Settings } from 'lucide-react';
 import type { NavigationTab } from '../../types';
 
 interface SidebarProps {
@@ -10,6 +10,7 @@ interface SidebarProps {
 const navItems: { icon: React.ReactNode; label: string; tab: NavigationTab }[] = [
   { icon: <Search className="w-4 h-4" />, label: '单机深度诊断', tab: 'diagnosis' },
   { icon: <LayoutDashboard className="w-4 h-4" />, label: '批量异常看板', tab: 'error_logs' },
+  { icon: <Library className="w-4 h-4" />, label: '知识库管理', tab: 'knowledge_base' },
 ];
 
 export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {

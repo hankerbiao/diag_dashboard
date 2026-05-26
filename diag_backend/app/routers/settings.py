@@ -1,6 +1,8 @@
 """
 用户设置 API
 """
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..models.request import SettingsUpdateRequest
@@ -55,7 +57,7 @@ async def update_settings(
 
         # 构建更新数据
         update_data = {
-            "updated_at": "now()"
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
 
         if request.ai_api_url is not None:

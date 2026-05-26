@@ -3,6 +3,8 @@
 """
 from typing import Optional
 
+from bson import ObjectId
+
 from ..core.mongodb import get_collection
 
 
@@ -27,13 +29,13 @@ class KnowledgeGraphService:
 
         # 模糊匹配 root_cause
         if error_description:
-            query["root_cause"] = {"$regex": error_description[:20], "$options": "i"}
+            query["$text"] = {"$search": error_description}
 
         cursor = col.find(query).limit(limit)
         cases = await cursor.to_list(length=limit)
 
         if not cases:
-            return self._mock_cases()
+            return []
 
         # 转换 ObjectId
         for case in cases:
@@ -46,9 +48,14 @@ class KnowledgeGraphService:
         limit: int = 20
     ) -> list[dict]:
         """获取设备测试日志"""
+        try:
+            oid = ObjectId(device_id)
+        except Exception:
+            return []
+
         # 先获取设备信息
         devices_col = get_collection("devices")
-        device = await devices_col.find_one({"_id": device_id})
+        device = await devices_col.find_one({"_id": oid})
         if not device:
             return []
 
@@ -70,6 +77,11 @@ class KnowledgeGraphService:
         limit: int = 10
     ) -> list[dict]:
         """获取设备维修历史"""
+        try:
+            oid = ObjectId(device_id)
+        except Exception:
+            return []
+
         col = get_collection("maintenance_records")
         cursor = col.find({"device_id": device_id}).sort("date", -1).limit(limit)
         records = await cursor.to_list(length=limit)
@@ -82,45 +94,25 @@ class KnowledgeGraphService:
         """通过 SN 获取设备信息"""
         col = get_collection("devices")
         device = await col.find_one({"sn": sn})
-
         if device:
             device["id"] = str(device.pop("_id"))
-            return device
+        return device
 
-        # Mock data for development
-        return {
-            "id": "mock-device-id",
-            "sn": sn,
-            "model": "2U Rack Server",
-            "batch": "#8821",
-            "factory": {"name": "天津"}
-        }
-
-    def _mock_cases(self) -> list[dict]:
-        """开发环境模拟数据"""
-        return [
-            {
-                "id": "case-1",
-                "title": "DIMM 奇偶校验失败案例",
-                "error_code": "0x822",
-                "root_cause": "DIMM插槽4电压离散跳动",
-                "repair_steps": [
-                    "执行 ECC 寄存器清除",
-                    "更换增强型 DDR4 内存",
-                    "重刷电压阈值固件"
-                ]
-            },
-            {
-                "id": "case-2",
-                "title": "批次 #8821 高温失效",
-                "error_code": "0x823",
-                "root_cause": "批次料件高温负荷不耐受",
-                "repair_steps": [
-                    "替换为新批次料件",
-                    "降频运行验证"
-                ]
-            }
-        ]
+    async def get_error_log_by_id(self, error_log_id: str) -> Optional[dict]:
+        """通过 ID 获取异常日志详情"""
+        try:
+            oid = ObjectId(error_log_id)
+        except Exception:
+            return None
+        try:
+            col = get_collection("error_logs")
+            log = await col.find_one({"_id": oid})
+            if log:
+                log["id"] = str(log.pop("_id"))
+            return log
+        except Exception as e:
+            logger.error("Failed to fetch error log %s: %s", error_log_id, e)
+            return None
 
 
 # 全局实例

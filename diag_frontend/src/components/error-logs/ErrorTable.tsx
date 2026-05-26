@@ -1,5 +1,7 @@
-import { Bot, CheckCircle2, RefreshCw, AlertTriangle, XCircle, Info } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Bot, CheckCircle2, RefreshCw, ArrowUpDown, XCircle, Info, Download } from 'lucide-react';
 import type { ErrorLogRow } from '../../types';
+import ResultBadge, { isFailureStatus } from '../common/ResultBadge';
 
 interface ErrorTableProps {
   data: ErrorLogRow[];
@@ -7,54 +9,47 @@ interface ErrorTableProps {
   analyzingId: string | null;
   analysisResult: Record<string, string>;
   onAnalyze: (id: string) => void;
+  logBaseUrl?: string;
 }
 
-function ResultBadge({ status }: { status: string }) {
-  const lower = (status || '').toLowerCase();
-  const isSuccess = ['成功', 'pass', 'passed', 'ok'].some(k => lower.includes(k));
-  const isFail = ['失败', 'fail', 'failed', 'ng', 'error'].some(k => lower.includes(k));
+type SortField = 'status' | 'decision' | null;
 
-  const config = isFail
-    ? { icon: <XCircle className="w-3 h-3" />, color: '#dc2626', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.2)' }
-    : isSuccess
-      ? { icon: <CheckCircle2 className="w-3 h-3" />, color: '#16a34a', bg: 'rgba(22,163,74,0.1)', border: 'rgba(22,163,74,0.2)' }
-      : { icon: null, color: '#64748b', bg: 'rgba(100,116,139,0.1)', border: 'rgba(100,116,139,0.2)' };
+const DECISION_MAP: Record<string, string> = {
+  retry: '重试',
+  continue: '继续',
+};
 
-  return (
-    <span
-      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold border"
-      style={{ backgroundColor: config.bg, color: config.color, borderColor: config.border }}
-    >
-      {config.icon}
-      {status || '-'}
-    </span>
+function translateDecision(decision: string): string {
+  const lower = (decision || '').toLowerCase().trim();
+  return DECISION_MAP[lower] || decision || '-';
+}
+
+export default function ErrorTable({ data, loading, analyzingId, analysisResult, onAnalyze, logBaseUrl = '' }: ErrorTableProps) {
+  const [sortField, setSortField] = useState<SortField>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const toggleSort = (field: 'status' | 'decision') => {
+    if (sortField === field) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDir('asc');
+    }
+  };
+
+  const sortedData = useMemo(() => {
+    if (!sortField) return data;
+    return [...data].sort((a, b) => {
+      const aVal = (a[sortField] || '').toLowerCase();
+      const bVal = (b[sortField] || '').toLowerCase();
+      return sortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+    });
+  }, [data, sortField, sortDir]);
+
+  const sortIcon = (field: SortField) => (
+    <ArrowUpDown className={`w-3 h-3 ml-1 inline-block transition-opacity ${sortField === field ? 'opacity-100' : 'opacity-30'}`} />
   );
-}
 
-function FaultTags({ types }: { types: string }) {
-  if (!types) return <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>-</span>;
-  const items = types.split(',').filter(Boolean);
-  if (items.length === 0) return <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>-</span>;
-  return (
-    <div className="flex flex-wrap gap-1">
-      {items.map((t, i) => (
-        <span
-          key={i}
-          className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-mono font-medium border"
-          style={{
-            backgroundColor: 'rgba(234,179,8,0.08)',
-            color: '#b45309',
-            borderColor: 'rgba(234,179,8,0.2)',
-          }}
-        >
-          {t.trim()}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-export default function ErrorTable({ data, loading, analyzingId, analysisResult, onAnalyze }: ErrorTableProps) {
   if (loading) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-3" style={{ color: 'var(--color-text-secondary)' }}>
@@ -85,15 +80,25 @@ export default function ErrorTable({ data, loading, analyzingId, analysisResult,
             <th className="px-5 py-3.5 border-b text-xs tracking-wider font-semibold">服务器 SN</th>
             <th className="px-5 py-3.5 border-b text-xs tracking-wider font-semibold">测试项</th>
             <th className="px-5 py-3.5 border-b text-xs tracking-wider font-semibold">测试时间</th>
-            <th className="px-5 py-3.5 border-b text-center text-xs tracking-wider font-semibold">测试结果</th>
-            <th className="px-5 py-3.5 border-b text-center text-xs tracking-wider font-semibold">判定</th>
-            <th className="px-5 py-3.5 border-b text-xs tracking-wider font-semibold">故障类型</th>
-            <th className="px-5 py-3.5 border-b text-xs tracking-wider font-semibold">日志路径</th>
+            <th
+              className="px-5 py-3.5 border-b text-center text-xs tracking-wider font-semibold cursor-pointer select-none hover:opacity-80"
+              onClick={() => toggleSort('status')}
+            >
+              测试结果{sortIcon('status')}
+            </th>
+            <th
+              className="px-5 py-3.5 border-b text-center text-xs tracking-wider font-semibold cursor-pointer select-none hover:opacity-80"
+              onClick={() => toggleSort('decision')}
+            >
+              判定{sortIcon('decision')}
+            </th>
+            <th className="px-5 py-3.5 border-b text-xs tracking-wider font-semibold">AI 异常摘要</th>
             <th className="px-5 py-3.5 border-b text-center text-xs tracking-wider font-semibold">大模型诊断</th>
+            <th className="px-5 py-3.5 border-b text-center text-xs tracking-wider font-semibold">操作</th>
           </tr>
         </thead>
         <tbody>
-          {data.map((row, idx) => (
+          {sortedData.map((row, idx) => (
             <tr
               key={row.id}
               className="transition-colors border-b group"
@@ -115,39 +120,73 @@ export default function ErrorTable({ data, loading, analyzingId, analysisResult,
                 <ResultBadge status={row.status} />
               </td>
               <td className="px-5 py-3.5 text-center text-xs font-medium" style={{ color: 'var(--color-text-primary)' }}>
-                {row.decision || '-'}
+                {translateDecision(row.decision)}
               </td>
-              <td className="px-5 py-3.5">
-                <FaultTags types={row.faultTypes} />
-              </td>
-              <td className="px-5 py-3.5">
-                <span
-                  className="rounded px-2.5 py-1 text-xs font-mono shadow-sm truncate max-w-[180px] inline-block align-middle cursor-help border"
-                  style={{ backgroundColor: 'var(--color-bg-primary)', borderColor: 'var(--color-border)', color: 'var(--color-text-primary)' }}
-                  title={row.logPath}
-                >
-                  {row.logPath || '-'}
+              <td className="px-5 py-3.5 max-w-[220px]">
+                <span className="text-xs leading-relaxed line-clamp-2" style={{ color: 'var(--color-text-secondary)' }}>
+                  {analysisResult[row.id]
+                    ? analysisResult[row.id].slice(0, 60) + '…'
+                    : row.faultTypes
+                      ? `检测到异常类型 [${row.faultTypes}]，建议点击智能剖析获取根因分析。`
+                      : '暂未检测到异常模式'}
                 </span>
               </td>
               <td className="px-5 py-3.5 text-center">
-                <button
-                  onClick={() => onAnalyze(row.id)}
-                  className="inline-flex items-center justify-center gap-1.5 transition-all text-xs font-bold px-3 py-1.5 rounded shadow-sm w-[110px] mx-auto border"
-                  style={
-                    analysisResult[row.id]
-                      ? { backgroundColor: 'rgba(16,185,129,0.1)', color: '#059669', borderColor: 'rgba(16,185,129,0.2)' }
-                      : { backgroundColor: 'var(--color-accent-light)', color: 'var(--color-accent)', borderColor: 'var(--color-accent-light)' }
-                  }
-                >
-                  {analyzingId === row.id ? (
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  ) : analysisResult[row.id] ? (
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                  ) : (
+                {isFailureStatus(row.status) || analysisResult[row.id] ? (
+                  <button
+                    onClick={() => onAnalyze(row.id)}
+                    className="inline-flex items-center justify-center gap-1.5 transition-all text-xs font-bold px-3 py-1.5 rounded shadow-sm w-[110px] mx-auto border"
+                    style={
+                      analysisResult[row.id]
+                        ? { backgroundColor: 'rgba(16,185,129,0.1)', color: '#059669', borderColor: 'rgba(16,185,129,0.2)' }
+                        : { backgroundColor: 'var(--color-accent-light)', color: 'var(--color-accent)', borderColor: 'var(--color-accent-light)' }
+                    }
+                  >
+                    {analyzingId === row.id ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : analysisResult[row.id] ? (
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                    ) : (
+                      <Bot className="w-3.5 h-3.5" />
+                    )}
+                    {analyzingId === row.id ? '分析生成中' : analysisResult[row.id] ? '查看分析' : '智能剖析'}
+                  </button>
+                ) : (
+                  <span
+                    className="inline-flex items-center justify-center gap-1.5 text-xs px-3 py-1.5 rounded w-[110px] mx-auto border"
+                    style={{
+                      backgroundColor: 'rgba(100,116,139,0.05)',
+                      color: 'var(--color-text-muted)',
+                      borderColor: 'rgba(100,116,139,0.1)',
+                      cursor: 'not-allowed',
+                      opacity: 0.5,
+                    }}
+                  >
                     <Bot className="w-3.5 h-3.5" />
-                  )}
-                  {analyzingId === row.id ? '分析生成中' : analysisResult[row.id] ? '查看分析' : '智能剖析'}
-                </button>
+                    智能剖析
+                  </span>
+                )}
+              </td>
+              <td className="px-5 py-3.5 text-center">
+                {row.logPath && row.logPath !== '-' && logBaseUrl ? (
+                  <button
+                    onClick={() => {
+                      const logPath = row.logPath.replace(/^\//, '');
+                      window.open(`${logBaseUrl}/${logPath}`, '_blank', 'noopener,noreferrer');
+                    }}
+                    className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded border transition-colors hover:opacity-80"
+                    style={{
+                      backgroundColor: 'var(--color-bg-primary)',
+                      borderColor: 'var(--color-border)',
+                      color: 'var(--color-text-primary)',
+                    }}
+                  >
+                    <Download className="w-3 h-3" />
+                    下载日志
+                  </button>
+                ) : (
+                  <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>-</span>
+                )}
               </td>
             </tr>
           ))}

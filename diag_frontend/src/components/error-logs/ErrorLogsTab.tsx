@@ -1,17 +1,20 @@
-import { useState, useCallback } from 'react';
-import { AlertTriangle } from 'lucide-react';
-import type { FactoryLocation, ErrorLogRow } from '../../types';
-import { syncApi, type SyncServer } from '../../api/fastapi';
+import { useState, useCallback, useMemo, useEffect } from 'react';
+import { ArrowUpDown } from 'lucide-react';
+import type { ErrorLogRow } from '../../types';
+import { syncApi, analyticsApi, type SyncServer, type DashboardInsights, type FactorySite } from '../../api/fastapi';
+import { mapServerState } from '../../utils/serverState';
+import { useDebounce } from '../../hooks/useDebounce';
 import SearchPanel from './SearchPanel';
-import ErrorTable from './ErrorTable';
 import AnalysisModal from './AnalysisModal';
-import ModelStatisticsDashboard from '../dashboard/ModelStatisticsDashboard';
+import ServerDetailModal from './ServerDetailModal';
+import BatchTestCharts from './charts/BatchTestCharts';
 
 interface ErrorLogsTabProps {
-  factory: FactoryLocation;
+  factory: string;
+  factorySites: FactorySite[];
 }
 
-export default function ErrorLogsTab({ factory }: ErrorLogsTabProps) {
+export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProps) {
   // 搜索
   const [sn, setSn] = useState('');
   const [productModels, setProductModels] = useState('');
@@ -24,13 +27,80 @@ export default function ErrorLogsTab({ factory }: ErrorLogsTabProps) {
 
   // 选中的 SN 及详情
   const [selectedSn, setSelectedSn] = useState<string | null>(null);
+  const [selectedServer, setSelectedServer] = useState<SyncServer | null>(null);
   const [detailRows, setDetailRows] = useState<ErrorLogRow[]>([]);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [showDetailModal, setShowDetailModal] = useState(false);
+
+  const currentFactory = factorySites.find(f => f.factory_id === factory);
+  const logBaseUrl = currentFactory?.log_base_url ?? '';
+
+  // 排序
+  const [sortField, setSortField] = useState<'status' | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  // 分析看板
+  const [insights, setInsights] = useState<DashboardInsights | null>(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [trend, setTrend] = useState<'day' | 'week' | 'month'>('day');
+
+  const loadInsights = useCallback(async (granularity: string) => {
+    setInsightsLoading(true);
+    try {
+      const res = await analyticsApi.getInsights({ factory_id: factory, days: 30, trend: granularity });
+      if (res.success && res.data) {
+        setInsights(res.data);
+      }
+    } finally {
+      setInsightsLoading(false);
+    }
+  }, [factory]);
+
+  // factory 切换或趋势切换时重新加载
+  useEffect(() => {
+    loadInsights(trend);
+  }, [loadInsights, trend]);
+
+  const handleTrendChange = (g: 'day' | 'week' | 'month') => {
+    setTrend(g);
+  };
 
   // 诊断
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   const [analysisResult, setAnalysisResult] = useState<Record<string, string>>({});
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
+
+  const sortedServers = useMemo(() => {
+    if (!sortField) return servers;
+    return [...servers].sort((a, b) => {
+      const aVal = mapServerState(a.server_state).label;
+      const bVal = mapServerState(b.server_state).label;
+      return sortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+    });
+  }, [servers, sortField, sortDir]);
+
+  const toggleSort = (field: 'status') => {
+    if (sortField === field) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDir('asc');
+    }
+  };
+
+  const debouncedSn = useDebounce(sn, 400);
+  const debouncedProductModels = useDebounce(productModels, 400);
+
+  // 防抖搜索
+  useEffect(() => {
+    if (!debouncedSn.trim() && !debouncedProductModels.trim()) {
+      if (isSearched) {
+        handleReset();
+      }
+      return;
+    }
+    handleSearch();
+  }, [debouncedSn, debouncedProductModels]);
 
   const handleSearch = async () => {
     setServerLoading(true);
@@ -39,15 +109,16 @@ export default function ErrorLogsTab({ factory }: ErrorLogsTabProps) {
     setDetailRows([]);
 
     try {
-      const res = await syncApi.getServers({
+      const serverRes = await syncApi.getServers({
+        factory_id: factory || undefined,
         search_sn: sn || undefined,
         search_product_models: productModels || undefined,
         page: 1,
         limit: 100,
       });
-      if (res.success && res.data) {
-        setServers(res.data.items);
-        setServerTotal(res.data.total);
+      if (serverRes.success && serverRes.data) {
+        setServers(serverRes.data.items);
+        setServerTotal(serverRes.data.total);
       }
     } finally {
       setServerLoading(false);
@@ -61,14 +132,19 @@ export default function ErrorLogsTab({ factory }: ErrorLogsTabProps) {
     setServers([]);
     setServerTotal(0);
     setSelectedSn(null);
+    setSelectedServer(null);
     setDetailRows([]);
+    setShowDetailModal(false);
+    loadInsights();
   };
 
-  const fetchDetails = useCallback(async (serverSn: string) => {
-    setSelectedSn(serverSn);
+  const fetchDetails = useCallback(async (server: SyncServer) => {
+    setSelectedSn(server.server_sn);
+    setSelectedServer(server);
+    setShowDetailModal(true);
     setDetailsLoading(true);
     try {
-      const res = await syncApi.getTestDetails(serverSn, { page: 1, limit: 200 });
+      const res = await syncApi.getTestDetails(server.server_sn, { page: 1, limit: 500 });
       if (res.success && res.data) {
         const rows: ErrorLogRow[] = res.data.items.map((d) => ({
           id: d.id,
@@ -116,20 +192,26 @@ export default function ErrorLogsTab({ factory }: ErrorLogsTabProps) {
     >
       <SearchPanel
         factory={factory}
+        factorySites={factorySites}
         sn={sn}
         productModels={productModels}
         onSnChange={setSn}
         onProductModelsChange={setProductModels}
-        onReset={handleReset}
         onSearch={handleSearch}
+        onReset={handleReset}
       />
 
-      {isSearched ? (
-        <>
-          {/* 服务器列表 */}
+      <div className="flex-1 flex flex-col min-h-0 overflow-y-auto custom-scrollbar">
+        {/* 默认视图：分析看板图表 */}
+        {!isSearched && (
+          <BatchTestCharts data={insights} loading={insightsLoading} trend={trend} onTrendChange={handleTrendChange} />
+        )}
+
+        {/* 搜索后显示服务器列表 */}
+        {isSearched && (
           <div
-            className="mx-4 mb-2 rounded-lg border overflow-hidden flex-none"
-            style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
+            className="mx-4 mb-4 rounded-lg border flex-none overflow-hidden flex flex-col"
+            style={{ maxHeight: '500px', backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
           >
             <div
               className="h-10 px-4 border-b flex items-center justify-between flex-none text-[12px]"
@@ -144,15 +226,20 @@ export default function ErrorLogsTab({ factory }: ErrorLogsTabProps) {
                 </span>
               )}
             </div>
-            <div className="max-h-[200px] overflow-auto custom-scrollbar">
+            <div className="flex-1 min-h-0 overflow-auto custom-scrollbar">
               {serverLoading ? (
                 <div className="flex items-center justify-center py-8 gap-2" style={{ color: 'var(--color-text-secondary)' }}>
                   <div className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: 'var(--color-accent)', borderTopColor: 'transparent' }} />
                   <span className="text-xs">加载中...</span>
                 </div>
               ) : servers.length === 0 ? (
-                <div className="flex items-center justify-center py-8 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-                  暂无匹配的服务器
+                <div className="flex flex-col items-center justify-center py-8 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                  <span>暂无匹配的服务器</span>
+                  <span className="mt-2" style={{ color: 'var(--color-text-muted)' }}>
+                    {factory
+                      ? `当前基地：${currentFactory?.name ?? factory}，请确认 SN 是否正确`
+                      : '请在右上角选择目标基地后重试'}
+                  </span>
                 </div>
               ) : (
                 <table className="w-full text-left text-[12px]">
@@ -161,18 +248,24 @@ export default function ErrorLogsTab({ factory }: ErrorLogsTabProps) {
                       <th className="px-4 py-2 font-semibold">SN</th>
                       <th className="px-4 py-2 font-semibold">型号</th>
                       <th className="px-4 py-2 font-semibold">产品型号</th>
-                      <th className="px-4 py-2 font-semibold text-center">告警数</th>
-                      <th className="px-4 py-2 font-semibold">状态</th>
-                      <th className="px-4 py-2 font-semibold">客户</th>
+                      <th className="px-4 py-2 font-semibold cursor-pointer select-none" onClick={() => toggleSort('status')}>
+                        <span className="inline-flex items-center gap-1">
+                          状态
+                          <ArrowUpDown className="w-3 h-3 opacity-50" />
+                        </span>
+                      </th>
+                      <th className="px-4 py-2 font-semibold">下一步骤</th>
+                      <th className="px-4 py-2 font-semibold">坐标位置</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {servers.map((srv) => {
+                    {sortedServers.map((srv) => {
                       const isSelected = selectedSn === srv.server_sn;
+                      const stateInfo = mapServerState(srv.server_state);
                       return (
                         <tr
                           key={srv.id}
-                          onClick={() => fetchDetails(srv.server_sn)}
+                          onClick={() => fetchDetails(srv)}
                           className="border-b cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50"
                           style={{
                             backgroundColor: isSelected ? 'var(--color-accent-light)' : 'transparent',
@@ -182,16 +275,16 @@ export default function ErrorLogsTab({ factory }: ErrorLogsTabProps) {
                           <td className="px-4 py-2.5 font-mono font-semibold" style={{ color: 'var(--color-accent)' }}>{srv.server_sn}</td>
                           <td className="px-4 py-2.5" style={{ color: 'var(--color-text-primary)' }}>{srv.model || '-'}</td>
                           <td className="px-4 py-2.5" style={{ color: 'var(--color-text-secondary)' }}>{srv.product_models || '-'}</td>
-                          <td className="px-4 py-2.5 text-center">
-                            {srv.alarm > 0 ? (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-bold"
-                                style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#dc2626' }}>
-                                <AlertTriangle className="w-3 h-3" />{srv.alarm}
-                              </span>
-                            ) : <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>0</span>}
+                          <td className="px-4 py-2.5">
+                            <span
+                              className="inline-flex px-2 py-0.5 rounded text-[11px] font-semibold"
+                              style={{ backgroundColor: stateInfo.bg, color: stateInfo.color }}
+                            >
+                              {stateInfo.label}
+                            </span>
                           </td>
-                          <td className="px-4 py-2.5" style={{ color: 'var(--color-text-secondary)' }}>{srv.server_state || '-'}</td>
-                          <td className="px-4 py-2.5" style={{ color: 'var(--color-text-secondary)' }}>{srv.customer_name || '-'}</td>
+                          <td className="px-4 py-2.5" style={{ color: 'var(--color-text-primary)' }}>{srv.next_item || '-'}</td>
+                          <td className="px-4 py-2.5 font-mono text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>{srv.position || '-'}</td>
                         </tr>
                       );
                     })}
@@ -200,37 +293,20 @@ export default function ErrorLogsTab({ factory }: ErrorLogsTabProps) {
               )}
             </div>
           </div>
+        )}
+      </div>
 
-          {/* 测试详情表 */}
-          <div
-            className="mx-4 mb-4 rounded-lg shadow-sm flex-1 flex flex-col min-h-0 border overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500"
-            style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
-          >
-            <div
-              className="h-10 px-4 border-b flex items-center justify-between flex-none"
-              style={{ backgroundColor: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }}
-            >
-              <span className="text-[12px] font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-                {selectedSn ? `${selectedSn} 的测试详情` : '选择一台服务器查看测试详情'}
-              </span>
-              {detailRows.length > 0 && (
-                <span className="text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
-                  共 {detailRows.length} 条
-                </span>
-              )}
-            </div>
-
-            <ErrorTable
-              data={detailRows}
-              loading={detailsLoading}
-              analyzingId={analyzingId}
-              analysisResult={analysisResult}
-              onAnalyze={handleAnalyze}
-            />
-          </div>
-        </>
-      ) : (
-        <ModelStatisticsDashboard />
+      {showDetailModal && selectedServer && (
+        <ServerDetailModal
+          server={selectedServer}
+          detailRows={detailRows}
+          detailsLoading={detailsLoading}
+          analyzingId={analyzingId}
+          analysisResult={analysisResult}
+          onAnalyze={handleAnalyze}
+          onClose={() => setShowDetailModal(false)}
+          logBaseUrl={logBaseUrl}
+        />
       )}
 
       <AnalysisModal
