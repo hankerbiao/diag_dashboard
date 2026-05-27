@@ -1,200 +1,126 @@
-"""
-RAGFlow 服务封装 — 知识库管理、文档解析、检索问答
-
-RAGFlow 配置可选。未配置时所有操作返回空/失败，不影响服务启动。
-"""
+"""RAGFlow 服务封装 — 知识库管理、文档解析、检索问答"""
 import logging
 from typing import Optional
-
 import httpx
+from contextlib import asynccontextmanager
 
 from ..core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 RAGFLOW_DEFAULT_DATASET_NAME = "weaveeye-knowledge-base"
-RAGFLOW_STATUS_MAP = {
-    "UNSTART": "queued",
-    "RUNNING": "parsing",
-    "DONE": "parsed",
-    "FAIL": "failed",
-}
+RAGFLOW_DEFAULT_CHAT_NAME = "WeaveEye-Diagnosis"
+RAGFLOW_STATUS_MAP = {"UNSTART": "queued", "RUNNING": "parsing", "DONE": "parsed", "FAIL": "failed"}
+
+# 超时配置
+T_SHORT, T_MEDIUM, T_LONG = 15, 30, 120
+
+_url: Optional[str] = None
+_key: Optional[str] = None
 
 
-def _get_credentials() -> tuple[str, str]:
-    s = get_settings()
-    return s.ragflow_api_url.rstrip("/") if s.ragflow_api_url else "", s.ragflow_api_key or ""
+def _cfg() -> tuple[str, str]:
+    global _url, _key
+    if _url is None:
+        s = get_settings()
+        _url = s.ragflow_api_url.rstrip("/") if s.ragflow_api_url else ""
+        _key = s.ragflow_api_key or ""
+    return _url, _key
 
 
-def _is_configured() -> bool:
-    url, key = _get_credentials()
+def _ok() -> bool:
+    url, key = _cfg()
     return bool(url and key)
 
 
-def _headers() -> dict:
-    _, key = _get_credentials()
-    return {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
+def _hdrs() -> dict:
+    return {"Authorization": f"Bearer {_cfg()[1]}", "Content-Type": "application/json"}
+
+
+@asynccontextmanager
+async def _client(timeout: int = T_SHORT):
+    if not _ok():
+        yield None
+        return
+    async with httpx.AsyncClient(timeout=timeout) as c:
+        yield c
 
 
 def _check(resp: httpx.Response) -> dict:
-    """统一检查 RAGFlow API 响应，返回 data 字段"""
     try:
         body = resp.json()
     except Exception:
-        logger.error("RAGFlow response not JSON: %s", resp.text[:500])
         raise RuntimeError(f"RAGFlow 返回异常: {resp.status_code}")
-
-    code = body.get("code", -1)
-    if code != 0:
+    if body.get("code", -1) != 0:
         msg = body.get("message", body.get("msg", "未知错误"))
-        logger.error("RAGFlow API error [%s]: %s", code, msg)
         raise RuntimeError(f"RAGFlow 错误: {msg}")
-
     return body.get("data", {})
 
 
-# ════════════════════════════════════════════════════════════
-# 1. Dataset — 知识库管理
-# ════════════════════════════════════════════════════════════
+# ── Dataset ──
 
-
-async def list_datasets(
-    page: int = 1,
-    page_size: int = 100,
-) -> list[dict]:
-    """获取知识库列表 (GET /api/v1/datasets)"""
-    if not _is_configured():
+async def list_datasets(page: int = 1, page_size: int = 100) -> list[dict]:
+    if not _ok():
         return []
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(
-            f"{_get_credentials()[0]}/api/v1/datasets",
-            params={"page": page, "page_size": page_size},
-            headers=_headers(),
-        )
+    async with _client() as c:
+        resp = await c.get(f"{_cfg()[0]}/api/v1/datasets", params={"page": page, "page_size": page_size}, headers=_hdrs())
         data = _check(resp)
         return data if isinstance(data, list) else data.get("items", [])
 
 
-async def create_dataset(
-    name: str,
-    description: str = "",
-) -> dict:
-    """创建知识库 (POST /api/v1/datasets)"""
-    if not _is_configured():
+async def create_dataset(name: str, description: str = "") -> dict:
+    if not _ok():
         return {}
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            f"{_get_credentials()[0]}/api/v1/datasets",
-            headers=_headers(),
-            json={"name": name, "description": description},
-        )
+    async with _client() as c:
+        resp = await c.post(f"{_cfg()[0]}/api/v1/datasets", headers=_hdrs(), json={"name": name, "description": description})
         return _check(resp)
 
 
 async def delete_dataset(dataset_id: str) -> bool:
-    """删除知识库 (DELETE /api/v1/datasets)"""
-    if not _is_configured():
+    if not _ok():
         return False
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.request(
-            "DELETE",
-            f"{_get_credentials()[0]}/api/v1/datasets",
-            headers=_headers(),
-            json={"ids": [dataset_id]},
-        )
-        _check(resp)
+    async with _client() as c:
+        await c.request("DELETE", f"{_cfg()[0]}/api/v1/datasets", headers=_hdrs(), json={"ids": [dataset_id]})
+        _check(c.response)
         return True
 
 
-# ════════════════════════════════════════════════════════════
-# 2. Document — 文档管理与解析
-# ════════════════════════════════════════════════════════════
+# ── Document ──
 
-
-async def upload_document(
-    dataset_id: str,
-    file_path: str,
-    file_name: str,
-) -> dict:
-    """上传文档到知识库 (POST /api/v1/datasets/{dataset_id}/documents)
-
-    返回: {"id": "...", "name": "...", "status": "UNSTART", ...}
-    """
-    if not _is_configured():
+async def upload_document(dataset_id: str, file_path: str, file_name: str) -> dict:
+    if not _ok():
         return {}
     from pathlib import Path
-
-    path = Path(file_path)
-    if not path.exists():
+    if not Path(file_path).exists():
         raise FileNotFoundError(f"文件不存在: {file_path}")
-
-    url, _ = _get_credentials()
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with _client(T_LONG) as c:
         with open(file_path, "rb") as f:
-            files = {"file": (file_name, f, "application/octet-stream")}
-            resp = await client.post(
-                f"{url}/api/v1/datasets/{dataset_id}/documents",
-                headers={"Authorization": _headers()["Authorization"]},
-                files=files,
-            )
+            resp = await c.post(f"{_cfg()[0]}/api/v1/datasets/{dataset_id}/documents",
+                                headers={"Authorization": _hdrs()["Authorization"]},
+                                files={"file": (file_name, f, "application/octet-stream")})
         data = _check(resp)
         return data[0] if isinstance(data, list) and data else data
 
 
-async def run_parsing(
-    dataset_id: str,
-    document_ids: list[str],
-) -> bool:
-    """触发文档解析 (POST /api/v1/datasets/{dataset_id}/chunks)"""
-    if not _is_configured() or not document_ids:
+async def run_parsing(dataset_id: str, document_ids: list[str]) -> bool:
+    if not _ok() or not document_ids:
         return True
-
-    url, _ = _get_credentials()
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            f"{url}/api/v1/datasets/{dataset_id}/chunks",
-            headers=_headers(),
-            json={"document_ids": document_ids},
-        )
+    async with _client(T_MEDIUM) as c:
+        resp = await c.post(f"{_cfg()[0]}/api/v1/datasets/{dataset_id}/chunks", headers=_hdrs(), json={"document_ids": document_ids})
         _check(resp)
         return True
 
 
-async def list_documents(
-    dataset_id: str,
-    page: int = 1,
-    page_size: int = 100,
-) -> list[dict]:
-    """查询知识库中文档列表及状态 (GET /api/v1/datasets/{dataset_id}/documents)"""
-    if not _is_configured():
+async def list_documents(dataset_id: str, page: int = 1, page_size: int = 100) -> list[dict]:
+    if not _ok():
         return []
-    url, _ = _get_credentials()
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(
-            f"{url}/api/v1/datasets/{dataset_id}/documents",
-            params={
-                "page": page,
-                "page_size": page_size,
-            },
-            headers=_headers(),
-        )
+    async with _client() as c:
+        resp = await c.get(f"{_cfg()[0]}/api/v1/datasets/{dataset_id}/documents", params={"page": page, "page_size": page_size}, headers=_hdrs())
         data = _check(resp)
-        if isinstance(data, list):
-            return data
-        return data.get("docs", data.get("items", []))
+        return data if isinstance(data, list) else data.get("docs", data.get("items", []))
 
 
-async def get_document_status(
-    dataset_id: str,
-    document_id: str,
-) -> str:
-    """查询单个文档解析状态
-
-    返回: "UNSTART" | "RUNNING" | "DONE" | "FAIL"
-    """
+async def get_document_status(dataset_id: str, document_id: str) -> str:
     docs = await list_documents(dataset_id, page_size=1000)
     for doc in docs:
         if doc.get("id") == document_id:
@@ -202,96 +128,138 @@ async def get_document_status(
     return "UNSTART"
 
 
-async def delete_document(
-    dataset_id: str,
-    document_id: str,
-) -> bool:
-    """从知识库删除文档 (DELETE /api/v1/datasets/{dataset_id}/documents)"""
-    if not _is_configured():
+async def delete_document(dataset_id: str, document_id: str) -> bool:
+    if not _ok():
         return False
-    url, _ = _get_credentials()
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.request(
-            "DELETE",
-            f"{url}/api/v1/datasets/{dataset_id}/documents",
-            headers=_headers(),
-            json={"ids": [document_id]},
-        )
+    async with _client() as c:
+        resp = await c.request("DELETE", f"{_cfg()[0]}/api/v1/datasets/{dataset_id}/documents", headers=_hdrs(), json={"ids": [document_id]})
         _check(resp)
         return True
 
 
-# ════════════════════════════════════════════════════════════
-# 3. Chat — 检索与问答推理 (预留)
-# ════════════════════════════════════════════════════════════
+# ── Chat / Retrieval ──
+
+async def list_chats(page: int = 1, page_size: int = 100) -> list[dict]:
+    if not _ok():
+        return []
+    async with _client() as c:
+        resp = await c.get(f"{_cfg()[0]}/api/v1/chats", params={"page": page, "page_size": page_size}, headers=_hdrs())
+        data = _check(resp)
+        return data.get("chats", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
 
 
-async def create_session(dataset_ids: list[str]) -> dict:
-    """创建检索会话 (POST /api/v1/conversation)"""
-    if not _is_configured():
+async def create_chat(name: str, dataset_ids: list[str]) -> dict:
+    if not _ok():
         return {}
-    url, _ = _get_credentials()
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            f"{url}/api/v1/conversation",
-            headers=_headers(),
-            json={"dataset_ids": dataset_ids},
-        )
+    async with _client() as c:
+        resp = await c.post(f"{_cfg()[0]}/api/v1/chats", headers=_hdrs(), json={"name": name, "dataset_ids": dataset_ids})
         return _check(resp)
 
 
-async def send_message(
-    session_id: str,
-    question: str,
-    stream: bool = False,
+async def update_chat(chat_id: str, dataset_ids: list[str]) -> dict:
+    if not _ok():
+        return {}
+    async with _client() as c:
+        resp = await c.put(f"{_cfg()[0]}/api/v1/chats/{chat_id}", headers=_hdrs(), json={"dataset_ids": dataset_ids})
+        return _check(resp)
+
+
+async def get_chat(chat_id: str) -> dict:
+    if not _ok():
+        return {}
+    for c in await list_chats(page_size=200):
+        if c.get("id") == chat_id:
+            return c
+    return {}
+
+
+async def search_knowledge_base(
+    question: str, similarity_threshold: float = 0.2, vector_similarity_weight: float = 0.3, top_k: int = 10,
 ) -> dict:
-    """发送问答消息 (POST /api/v1/conversation/completion)"""
-    if not _is_configured():
+    """检索知识库 — 使用 RAGFlow retrieval API"""
+    if not _ok():
+        return {"references": []}
+    dataset_id = await resolve_default_dataset()
+    if not dataset_id:
+        return {"references": []}
+
+    async with _client(T_MEDIUM) as c:
+        resp = await c.post(f"{_cfg()[0]}/api/v1/retrieval", headers=_hdrs(), json={
+            "question": question, "dataset_ids": [dataset_id],
+            "similarity_threshold": similarity_threshold, "vector_similarity_weight": vector_similarity_weight, "top_k": top_k,
+        })
+        result = resp.json()
+        if result.get("code", -1) != 0:
+            raise RuntimeError(f"RAGFlow 检索错误: {result.get('message', result.get('msg', '未知错误'))}")
+
+        data = result.get("data", {})
+        chunks = data.get("chunks", [])
+        doc_map = {d.get("doc_id", ""): d.get("doc_name", "") for d in data.get("doc_aggs", []) if d.get("doc_id")}
+
+    return {"references": [{
+        "chunk_id": c.get("id", ""), "content": c.get("content", ""),
+        "similarity": c.get("similarity", c.get("vector_similarity", 0.0)),
+        "doc_name": doc_map.get(c.get("document_id", ""), ""),
+    } for c in chunks]}
+
+
+async def chat_completion(chat_id: str, question: str, stream: bool = False) -> dict:
+    if not _ok():
         return {}
-    url, _ = _get_credentials()
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            f"{url}/api/v1/conversation/completion",
-            headers=_headers(),
-            json={
-                "conversation_id": session_id,
-                "question": question,
-                "stream": stream,
-            },
-        )
-        return _check(resp)
+    chat_info = await get_chat(chat_id)
+    async with _client(T_LONG) as c:
+        body = {"messages": [{"role": "user", "content": question}], "stream": stream, "extra_body": {"reference": True}}
+        if chat_info.get("llm_id"):
+            body["model"] = chat_info["llm_id"]
+        resp = await c.post(f"{_cfg()[0]}/api/v1/openai/{chat_id}/chat/completions", headers=_hdrs(), json=body)
+        result = resp.json()
+        if result.get("code", -1) != 0:
+            raise RuntimeError(f"RAGFlow 对话错误: {result.get('message', result.get('msg', '未知错误'))}")
+        return result
 
 
-# ════════════════════════════════════════════════════════════
-# 状态映射工具
-# ════════════════════════════════════════════════════════════
+# ── 默认资源解析 ──
 
 _default_dataset_id: Optional[str] = None
+_default_chat_id: Optional[str] = None
 
 
 async def resolve_default_dataset() -> str:
-    """获取或自动创建默认知识库，返回 dataset_id"""
-    if not _is_configured():
-        return ""
-
     global _default_dataset_id
-    if _default_dataset_id:
-        return _default_dataset_id
+    if not _ok() or _default_dataset_id:
+        return _default_dataset_id or ""
 
-    datasets = await list_datasets(page_size=200)
-    for ds in datasets:
-        if ds.get("name") == RAGFLOW_DEFAULT_DATASET_NAME:
+    cfg_name = get_settings().ragflow_default_dataset or RAGFLOW_DEFAULT_DATASET_NAME
+    for ds in await list_datasets(page_size=200):
+        if ds.get("name") == cfg_name:
             _default_dataset_id = ds.get("id")
             return _default_dataset_id
 
-    result = await create_dataset(
-        name=RAGFLOW_DEFAULT_DATASET_NAME,
-        description="WeaveEye 智能诊断系统默认知识库",
-    )
+    result = await create_dataset(name=cfg_name, description="WeaveEye 智能诊断系统默认知识库")
     _default_dataset_id = result.get("id")
     return _default_dataset_id
 
 
+async def resolve_default_chat() -> str:
+    global _default_chat_id
+    if not _ok() or _default_chat_id:
+        return _default_chat_id or ""
+
+    dataset_id = await resolve_default_dataset()
+    if not dataset_id:
+        return ""
+
+    for c in await list_chats(page_size=200):
+        if c.get("name") == RAGFLOW_DEFAULT_CHAT_NAME:
+            _default_chat_id = c.get("id")
+            if dataset_id not in c.get("dataset_ids", []):
+                await update_chat(_default_chat_id, [dataset_id])
+            return _default_chat_id
+
+    result = await create_chat(name=RAGFLOW_DEFAULT_CHAT_NAME, dataset_ids=[dataset_id])
+    _default_chat_id = result.get("id")
+    return _default_chat_id
+
+
 def map_status(ragflow_status: str) -> str:
-    """将 RAGFlow 状态转为系统内部状态"""
     return RAGFLOW_STATUS_MAP.get(ragflow_status, "queued")

@@ -14,6 +14,9 @@ class Settings(BaseSettings):
 
     # AI Providers
     openai_api_key: str = ""
+    openai_api_url: str = ""
+    ai_model: str = "gpt-4-turbo"
+    ai_temperature: float = 0.7
     gemini_api_key: str = ""
 
     # Server

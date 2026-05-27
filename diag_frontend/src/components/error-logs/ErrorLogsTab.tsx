@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { ArrowUpDown } from 'lucide-react';
 import type { ErrorLogRow } from '../../types';
-import { syncApi, analyticsApi, type SyncServer, type DashboardInsights, type FactorySite } from '../../api/fastapi';
+import { syncApi, analyticsApi, diagnosisApi, type SyncServer, type DashboardInsights, type FactorySite, type DiagnosisCache } from '../../api/fastapi';
 import { mapServerState } from '../../utils/serverState';
 import { useDebounce } from '../../hooks/useDebounce';
 import SearchPanel from './SearchPanel';
@@ -67,8 +67,10 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
 
   // 诊断
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
-  const [analysisResult, setAnalysisResult] = useState<Record<string, string>>({});
+  const [analysisResult, setAnalysisResult] = useState<Record<string, DiagnosisCache>>({});
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
+  const [analyzingProgress, setAnalyzingProgress] = useState<{ stage: string; detail: string } | null>(null);
+  const [streamingText, setStreamingText] = useState('');
 
   const sortedServers = useMemo(() => {
     if (!sortField) return servers;
@@ -166,17 +168,53 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
     }
   }, []);
 
-  const handleAnalyze = (id: string) => {
+  const handleAnalyze = async (id: string) => {
     setSelectedLogId(id);
     if (analysisResult[id]) return;
     setAnalyzingId(id);
-    setTimeout(() => {
-      setAnalysisResult((prev) => ({
-        ...prev,
-        [id]: '基于知识图谱深度分析与大模型聚类反馈：该测试节点的离群异常与已知高频缺陷簇表现出关键特征维度的吻合。系统推荐最优处置策略为主板阻抗微调或执行诊断框架 `diag --verify` 命令进行边界校验验证。',
-      }));
-      setAnalyzingId(null);
-    }, 1500);
+    setStreamingText('');
+
+    const params = logBaseUrl ? `?log_base_url=${encodeURIComponent(logBaseUrl)}` : '';
+    await diagnosisApi.analyzeSSE(
+      `/api/diagnosis/error-log/${id}/analyze${params}`,
+      (_stage, detail) => setAnalyzingProgress({ stage: _stage, detail }),
+      (data) => {
+        setAnalysisResult((prev) => ({ ...prev, [id]: data }));
+        setAnalyzingId(null);
+        setAnalyzingProgress(null);
+        setStreamingText('');
+      },
+      (_message) => {
+        setAnalyzingId(null);
+        setAnalyzingProgress(null);
+        setStreamingText('');
+      },
+      (text) => setStreamingText((prev) => prev + text),
+    );
+  };
+
+  const handleReAnalyze = async (id: string) => {
+    setAnalyzingId(id);
+    setAnalyzingProgress(null);
+    setStreamingText('');
+
+    const params = logBaseUrl ? `?log_base_url=${encodeURIComponent(logBaseUrl)}` : '';
+    await diagnosisApi.analyzeSSE(
+      `/api/diagnosis/error-log/${id}/re-analyze${params}`,
+      (_stage, detail) => setAnalyzingProgress({ stage: _stage, detail }),
+      (data) => {
+        setAnalysisResult((prev) => ({ ...prev, [id]: data }));
+        setAnalyzingId(null);
+        setAnalyzingProgress(null);
+        setStreamingText('');
+      },
+      (_message) => {
+        setAnalyzingId(null);
+        setAnalyzingProgress(null);
+        setStreamingText('');
+      },
+      (text) => setStreamingText((prev) => prev + text),
+    );
   };
 
   const handleCloseModal = () => {
@@ -313,7 +351,10 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
         selectedLog={selectedDetail}
         analyzingId={analyzingId}
         analysisResult={analysisResult}
+        analyzingProgress={analyzingProgress}
+        streamingText={streamingText}
         onClose={handleCloseModal}
+        onReAnalyze={handleReAnalyze}
       />
     </div>
   );

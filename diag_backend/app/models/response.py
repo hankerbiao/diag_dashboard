@@ -98,6 +98,21 @@ class KnowledgeDocResponse(BaseModel):
     uploaded_at: Optional[str] = None
 
 
+class DiagnosisCacheResponse(BaseModel):
+    id: str
+    error_log_id: str
+    sn: str
+    test_item: str
+    root_cause: str
+    evidence: list[str] = []
+    analysis: str
+    repair_suggestions: list[str]
+    knowledge_refs: list[dict] = []
+    log_content: str = ""
+    created_at: str
+    is_cached: bool = False
+
+
 class PaginatedResponse(BaseModel):
     items: list
     total: int

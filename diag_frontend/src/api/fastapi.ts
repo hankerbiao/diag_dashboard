@@ -79,6 +79,21 @@ export interface Settings {
   active_kbs: string[];
 }
 
+export interface DiagnosisCache {
+  id: string;
+  error_log_id: string;
+  sn: string;
+  test_item: string;
+  root_cause: string;
+  evidence: string[];
+  analysis: string;
+  repair_suggestions: string[];
+  knowledge_refs: Array<{ source: string; content: string }>;
+  log_content: string;
+  created_at: string;
+  is_cached: boolean;
+}
+
 // 诊断 API
 export const diagnosisApi = {
   async diagnoseBySN(sn: string, factory: string): Promise<ApiResponse<DiagnosisResult>> {
@@ -90,6 +105,96 @@ export const diagnosisApi = {
 
   async analyzeErrorLog(errorLogId: string): Promise<ApiResponse<ErrorAnalysis>> {
     return fetchApi<ErrorAnalysis>(`/api/diagnosis/error-log/${errorLogId}`, {
+      method: 'POST',
+    });
+  },
+
+  async analyzeErrorLogWithKB(errorLogId: string, logBaseUrl?: string): Promise<ApiResponse<DiagnosisCache>> {
+    const params = logBaseUrl ? `?log_base_url=${encodeURIComponent(logBaseUrl)}` : '';
+    return fetchApi<DiagnosisCache>(`/api/diagnosis/error-log/${errorLogId}/analyze${params}`, {
+      method: 'POST',
+    });
+  },
+
+  /**
+   * SSE 流式诊断分析 — 实时推送阶段性进展 + LLM 流式输出
+   *
+   * 事件类型:
+   *   event: progress → data: {"stage":"download|scan|context|ragflow|llm","detail":"..."}
+   *   event: token    → data: {"text":"..."}                    (LLM 流式输出)
+   *   event: done     → data: {"success":true,"data":{...}}
+   *   event: error    → data: {"message":"..."}
+   */
+  async analyzeSSE(
+    endpoint: string,
+    onProgress: (stage: string, detail: string) => void,
+    onComplete: (data: DiagnosisCache) => void,
+    onError: (message: string) => void,
+    onToken?: (text: string) => void,
+  ): Promise<void> {
+    const token = getAccessToken();
+    const resp = await fetch(`${API_BASE_URL}${endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+
+    if (!resp.ok || !resp.body) {
+      onError(`请求失败: ${resp.status}`);
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        // 保留最后一个不完整的行
+        buffer = lines.pop() || '';
+
+        let currentEvent = '';
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6);
+            try {
+              const data = JSON.parse(jsonStr);
+              if (currentEvent === 'progress') {
+                onProgress(data.stage, data.detail);
+              } else if (currentEvent === 'token') {
+                onToken?.(data.text);
+              } else if (currentEvent === 'done') {
+                if (data.success && data.data) {
+                  onComplete(data.data);
+                } else {
+                  onError(data.message || '分析失败');
+                }
+              } else if (currentEvent === 'error') {
+                onError(data.message || '未知错误');
+              }
+            } catch {
+              // skip malformed JSON
+            }
+          }
+        }
+      }
+    } catch (e) {
+      onError(e instanceof Error ? e.message : '网络连接中断');
+    }
+  },
+
+  async reAnalyzeErrorLog(errorLogId: string, logBaseUrl?: string): Promise<ApiResponse<DiagnosisCache>> {
+    const params = logBaseUrl ? `?log_base_url=${encodeURIComponent(logBaseUrl)}` : '';
+    return fetchApi<DiagnosisCache>(`/api/diagnosis/error-log/${errorLogId}/re-analyze${params}`, {
       method: 'POST',
     });
   },
@@ -274,6 +379,17 @@ export interface KnowledgeDoc {
   uploaded_at: string;
 }
 
+export interface SearchReference {
+  chunk_id: string;
+  content: string;
+  similarity: number;
+  doc_name: string;
+}
+
+export interface KnowledgeSearchResult {
+  references: SearchReference[];
+}
+
 export const knowledgeBaseApi = {
   async upload(file: File, title?: string, description?: string, tags?: string): Promise<ApiResponse<KnowledgeDoc>> {
     const formData = new FormData();
@@ -318,6 +434,13 @@ export const knowledgeBaseApi = {
     return fetchApi(`/api/knowledge-base/documents/${docId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
+    });
+  },
+
+  async search(question: string): Promise<ApiResponse<KnowledgeSearchResult>> {
+    return fetchApi<KnowledgeSearchResult>('/api/knowledge-base/search', {
+      method: 'POST',
+      body: JSON.stringify({ question }),
     });
   },
 
