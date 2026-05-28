@@ -418,6 +418,7 @@ export interface SyncJobItem {
   triggered_by: string;
   output?: string;
   error?: string;
+  progress?: string;
 }
 
 // 数据查询 API（只读 — 数据由独立脚本同步）

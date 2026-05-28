@@ -1,8 +1,20 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Loader2, AlertCircle, CheckCircle2, Database, HardDrive, RefreshCw,
 } from 'lucide-react';
 import { syncApi, type AutoSyncConfig, type SyncJobItem, type AutoSyncFactoryConfig } from '../../api/fastapi';
+
+function ElapsedTime({ since }: { since: string }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const secs = Math.floor((now - new Date(since).getTime()) / 1000);
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return <span>{m}:{String(s).padStart(2, '0')}</span>;
+}
 
 function formatTime(iso: string | null): string {
   if (!iso) return '从未';
@@ -100,9 +112,34 @@ export default function SyncManagement() {
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [recentJobs, setRecentJobs] = useState<SyncJobItem[]>([]);
 
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const showFeedback = useCallback((type: 'success' | 'error', message: string) => {
     setFeedback({ type, message });
     setTimeout(() => setFeedback(null), 3000);
+  }, []);
+
+  const loadJobs = useCallback(async () => {
+    try {
+      const resp = await syncApi.getJobs({ limit: 5 });
+      if (resp.success && resp.data) setRecentJobs(resp.data.items);
+    } catch { /* ignore polling errors */ }
+  }, []);
+
+  const startPolling = useCallback(() => {
+    if (pollTimerRef.current) return;
+    let elapsed = 0;
+    pollTimerRef.current = setInterval(() => {
+      elapsed += 3;
+      loadJobs();
+      if (elapsed >= 120) {
+        if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null; }
+      }
+    }, 3000);
+  }, [loadJobs]);
+
+  useEffect(() => () => {
+    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
   }, []);
 
   const loadConfig = useCallback(async () => {
@@ -188,7 +225,8 @@ export default function SyncManagement() {
     try {
       const resp = await syncApi.triggerSync(factoryId);
       if (resp.success) {
-        showFeedback('success', `${factoryId} 同步任务已启动`);
+        showFeedback('success', `${factoryId} 同步任务已启动，后台执行中...`);
+        startPolling();
         loadConfig();
       } else {
         showFeedback('error', resp.error || '触发失败');
@@ -205,7 +243,8 @@ export default function SyncManagement() {
     try {
       const resp = await syncApi.triggerMesSync();
       if (resp.success) {
-        showFeedback('success', 'MES 同步任务已启动');
+        showFeedback('success', 'MES 同步任务已启动，后台执行中...');
+        startPolling();
         loadConfig();
       } else {
         showFeedback('error', resp.error || '触发失败');
@@ -375,30 +414,48 @@ export default function SyncManagement() {
               </tr>
             </thead>
             <tbody>
-              {recentJobs.map((job) => (
-                <tr key={job.id} style={{ borderBottom: '1px solid var(--color-border)' }}>
-                  <td className="px-5 py-2.5 font-medium" style={{ color: 'var(--color-text-primary)' }}>
-                    {job.sync_type === 'sims' ? 'SIMS' : 'MES'}
-                  </td>
-                  <td className="px-5 py-2.5 font-mono text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>
-                    {job.factory_id}
-                  </td>
-                  <td className="px-5 py-2.5">
-                    <span
-                      className="inline-flex items-center gap-1 text-[12px] font-medium px-2 py-0.5 rounded-full"
-                      style={{
-                        backgroundColor: job.status === 'completed' ? 'rgba(16,185,129,0.1)' : job.status === 'failed' ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)',
-                        color: job.status === 'completed' ? '#059669' : job.status === 'failed' ? '#dc2626' : '#d97706',
-                      }}
-                    >
-                      {job.status === 'completed' ? '完成' : job.status === 'failed' ? '失败' : '运行中'}
-                    </span>
-                  </td>
-                  <td className="px-5 py-2.5 font-mono text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>
-                    {formatTime(job.started_at)}
-                  </td>
-                </tr>
-              ))}
+              {recentJobs.map((job) => {
+                const isRunning = job.status === 'running';
+                return (
+                  <React.Fragment key={job.id}>
+                    <tr style={{ borderBottom: isRunning ? 'none' : '1px solid var(--color-border)' }}>
+                      <td className="px-5 py-2.5 font-medium" style={{ color: 'var(--color-text-primary)' }}>
+                        {job.sync_type === 'sims' ? 'SIMS' : 'MES'}
+                      </td>
+                      <td className="px-5 py-2.5 font-mono text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>
+                        {job.factory_id}
+                      </td>
+                      <td className="px-5 py-2.5">
+                        <span
+                          className="inline-flex items-center gap-1 text-[12px] font-medium px-2 py-0.5 rounded-full"
+                          style={{
+                            backgroundColor: job.status === 'completed' ? 'rgba(16,185,129,0.1)' : job.status === 'failed' ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)',
+                            color: job.status === 'completed' ? '#059669' : job.status === 'failed' ? '#dc2626' : '#d97706',
+                          }}
+                        >
+                          {isRunning && <Loader2 className="w-3 h-3 animate-spin" />}
+                          {job.status === 'completed' ? '完成' : job.status === 'failed' ? '失败' : '运行中'}
+                          {isRunning && ' '}
+                          {isRunning && <ElapsedTime since={job.started_at} />}
+                        </span>
+                      </td>
+                      <td className="px-5 py-2.5 font-mono text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>
+                        {formatTime(job.started_at)}
+                      </td>
+                    </tr>
+                    {isRunning && job.progress && (
+                      <tr style={{ borderBottom: '1px solid var(--color-border)' }}>
+                        <td colSpan={4} className="px-5 pb-3">
+                          <pre className="text-[11px] font-mono leading-relaxed rounded-lg p-3 max-h-32 overflow-y-auto custom-scrollbar whitespace-pre-wrap break-all"
+                            style={{ backgroundColor: '#1a1b26', color: '#94a3b8', border: '1px solid #334155' }}>
+                            {job.progress}
+                          </pre>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

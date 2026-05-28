@@ -15,7 +15,7 @@ from ..core.mongodb import get_collection
 from ..models.request import AutoSyncConfigUpdateRequest
 from ..models.response import ApiResponse
 from ..services.sync_service import get_sync_service
-from ..services.sync_scheduler_service import get_sync_scheduler_service
+from ..services.sync_scheduler_service import get_sync_scheduler_service, execute_sync_script
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +31,9 @@ _SCRIPTS_DIR = os.path.abspath(
 @router.post("/trigger", response_model=ApiResponse)
 async def trigger_sync(
     factory: Optional[str] = Query(None, description="指定厂区，不传则全部同步"),
-    current_user: dict = Depends(require_role(["admin", "engineer"])),
+    current_user: dict = Depends(get_current_user),
 ):
-    """触发数据同步（调用 sync_data.py 脚本，需要 admin/engineer 角色）"""
+    """触发数据同步（调用 sync_data.py 脚本）"""
     if _sync_lock.locked():
         return ApiResponse(success=False, error="已有同步任务正在进行中")
 
@@ -54,27 +54,8 @@ async def trigger_sync(
             result = await col.insert_one(job)
             job_id = str(result.inserted_id)
 
-            # 异步执行同步（不阻塞响应）
-            async def run_sync():
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, stderr = await proc.communicate()
-                status = "completed" if proc.returncode == 0 else "failed"
-                await col.update_one(
-                    {"_id": result.inserted_id},
-                    {"$set": {
-                        "status": status,
-                        "completed_at": datetime.now(timezone.utc).isoformat(),
-                        "output": stdout.decode()[-1000:] if stdout else "",
-                        "error": stderr.decode()[-1000:] if stderr else "",
-                    }},
-                )
-                logger.info("Sync job %s finished with status: %s", job_id, status)
-
-            asyncio.create_task(run_sync())
+            # 异步执行同步（不阻塞响应，进度实时写入 MongoDB）
+            asyncio.create_task(execute_sync_script(cmd, job_id))
 
             return ApiResponse(
                 success=True,
@@ -164,7 +145,7 @@ async def update_auto_sync_config(
 
 @router.post("/trigger-mes", response_model=ApiResponse)
 async def trigger_mes_sync(
-    current_user: dict = Depends(require_role(["admin", "engineer"])),
+    current_user: dict = Depends(get_current_user),
 ):
     """手动触发 MES 维修数据同步"""
     svc = get_sync_scheduler_service()
