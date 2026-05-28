@@ -34,12 +34,35 @@ async function fetchApi<T>(
   }
 }
 
+export interface TestLogItem {
+  id: string;
+  test_item: string;
+  test_time: string;
+  fail_details: string;
+  fault_type1: string;
+  fault_type2: string;
+  fault_type3: string;
+  decision: string;
+  big_flow: string;
+  log_path: string;
+}
+
+export interface SimilarCaseItem {
+  id: string;
+  title: string;
+  root_cause: string;
+  similarity: number;
+}
+
 export interface DiagnosisResult {
   sn: string;
   category: string;
   summary: string;
   confidence: number;
+  root_cause_detail: string;
+  affected_components: string[];
   suggestions: string[];
+  preventive_measures: string[];
   reference_logs: Array<{
     id: string;
     source: string;
@@ -52,6 +75,8 @@ export interface DiagnosisResult {
     component: string;
     action: string;
   }>;
+  test_logs: TestLogItem[];
+  similar_cases: SimilarCaseItem[];
 }
 
 export interface ErrorAnalysis {
@@ -97,6 +122,64 @@ export interface DiagnosisCache {
   is_cached: boolean;
 }
 
+interface SSECallbacks<T> {
+  onProgress: (stage: string, detail: string) => void;
+  onComplete: (data: T) => void;
+  onError: (message: string) => void;
+  onToken?: (text: string) => void;
+}
+
+async function consumeSSE<T>(resp: Response, callbacks: SSECallbacks<T>): Promise<void> {
+  if (!resp.ok || !resp.body) {
+    callbacks.onError(`请求失败: ${resp.status}`);
+    return;
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const { onProgress, onComplete, onError, onToken } = callbacks;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      let currentEvent = '';
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (currentEvent === 'progress') {
+              onProgress(data.stage, data.detail);
+            } else if (currentEvent === 'token') {
+              onToken?.(data.text);
+            } else if (currentEvent === 'done') {
+              if (data.success && data.data) {
+                onComplete(data.data);
+              } else {
+                onError(data.message || '分析失败');
+              }
+            } else if (currentEvent === 'error') {
+              onError(data.message || '未知错误');
+            }
+          } catch {
+            // skip malformed JSON
+          }
+        }
+      }
+    }
+  } catch (e) {
+    onError(e instanceof Error ? e.message : '网络连接中断');
+  }
+}
+
 // 诊断 API
 export const diagnosisApi = {
   async diagnoseBySN(sn: string, factory: string): Promise<ApiResponse<DiagnosisResult>> {
@@ -119,15 +202,6 @@ export const diagnosisApi = {
     });
   },
 
-  /**
-   * SSE 流式诊断分析 — 实时推送阶段性进展 + LLM 流式输出
-   *
-   * 事件类型:
-   *   event: progress → data: {"stage":"download|scan|context|ragflow|llm","detail":"..."}
-   *   event: token    → data: {"text":"..."}                    (LLM 流式输出)
-   *   event: done     → data: {"success":true,"data":{...}}
-   *   event: error    → data: {"message":"..."}
-   */
   async analyzeSSE(
     endpoint: string,
     onProgress: (stage: string, detail: string) => void,
@@ -143,56 +217,41 @@ export const diagnosisApi = {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     });
+    await consumeSSE<DiagnosisCache>(resp, { onProgress, onComplete, onError, onToken });
+  },
 
-    if (!resp.ok || !resp.body) {
-      onError(`请求失败: ${resp.status}`);
-      return;
-    }
+  async followUp(sn: string, question: string, diagnosisContext: string): Promise<ApiResponse<{ answer: string }>> {
+    return fetchApi<{ answer: string }>('/api/diagnosis/sn/follow-up', {
+      method: 'POST',
+      body: JSON.stringify({ sn, question, diagnosis_context: diagnosisContext }),
+    });
+  },
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
+  async getLogContent(sn: string, factory: string, logPath: string): Promise<ApiResponse<{ content: string }>> {
+    const params = `log_path=${encodeURIComponent(logPath)}`;
+    return fetchApi<{ content: string }>(`/api/diagnosis/sn/log-content?${params}`, {
+      method: 'POST',
+      body: JSON.stringify({ sn, factory }),
+    });
+  },
 
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        // 保留最后一个不完整的行
-        buffer = lines.pop() || '';
-
-        let currentEvent = '';
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            currentEvent = line.slice(7).trim();
-          } else if (line.startsWith('data: ')) {
-            const jsonStr = line.slice(6);
-            try {
-              const data = JSON.parse(jsonStr);
-              if (currentEvent === 'progress') {
-                onProgress(data.stage, data.detail);
-              } else if (currentEvent === 'token') {
-                onToken?.(data.text);
-              } else if (currentEvent === 'done') {
-                if (data.success && data.data) {
-                  onComplete(data.data);
-                } else {
-                  onError(data.message || '分析失败');
-                }
-              } else if (currentEvent === 'error') {
-                onError(data.message || '未知错误');
-              }
-            } catch {
-              // skip malformed JSON
-            }
-          }
-        }
-      }
-    } catch (e) {
-      onError(e instanceof Error ? e.message : '网络连接中断');
-    }
+  async diagnoseBySNSse(
+    sn: string, factory: string,
+    onProgress: (stage: string, detail: string) => void,
+    onComplete: (data: DiagnosisResult) => void,
+    onError: (message: string) => void,
+    onToken?: (text: string) => void,
+  ): Promise<void> {
+    const token = getAccessToken();
+    const resp = await fetch(`${API_BASE_URL}/api/diagnosis/sn/analyze`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ sn, factory }),
+    });
+    await consumeSSE<DiagnosisResult>(resp, { onProgress, onComplete, onError, onToken });
   },
 
   async reAnalyzeErrorLog(errorLogId: string, logBaseUrl?: string): Promise<ApiResponse<DiagnosisCache>> {

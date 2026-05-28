@@ -193,27 +193,107 @@ class LLMService:
     # 诊断业务方法
     # ------------------------------------------------------------------
 
-    async def diagnose_sn(self, sn: str, device_info: dict, test_logs: list[dict],
-                          maintenance: list[dict], similar_cases: list[dict]) -> dict:
-        prompt = f"""你是一个专业的硬件诊断工程师。请根据以下信息对设备进行诊断：
+    SN_DIAGNOSIS_FALLBACK = {
+        "category": "未知", "summary": "解析失败", "confidence": 0.5,
+        "root_cause_detail": "", "affected_components": [],
+        "suggestions": ["联系技术支持"], "preventive_measures": [],
+    }
 
-设备信息：SN={sn}, 型号={device_info.get('model', '未知')}, 批次={device_info.get('batch', '未知')}
+    def _build_sn_diagnosis_prompt(self, sn: str, device_info: dict,
+                                    test_logs: list[dict], maintenance: list[dict],
+                                    similar_cases: list[dict], kb_context: str = "",
+                                    failed_logs: Optional[list[dict]] = None) -> str:
+        sections: list[str] = [
+            "你是一个资深的服务器硬件诊断工程师，拥有丰富的 x86 服务器、存储设备、网络设备故障排查经验。",
+            "请综合利用以下数据源以及你自身的硬件工程知识，对设备进行深度诊断分析：",
+        ]
 
-测试日志：
+        # 失败用例 — 重点分析对象
+        failed = failed_logs or []
+        if failed:
+            lines = ["## 一、失败测试用例（重点分析）\n以下为该设备在 SIMS 测试中的失败项目："]
+            for fl in failed[:10]:
+                lines.append(f"- [{fl.get('test_time')}] {fl.get('test_item')}: {fl.get('fail_details', '异常')}")
+            sections.append("\n".join(lines))
+
+        # 知识库上下文
+        if kb_context:
+            sections.append(kb_context)
+
+        # 设备信息 + 完整日志 + 维修 + 案例
+        sections.append(f"""## 二、设备背景信息
+- 设备 SN: {sn}
+- 型号: {device_info.get('model', '未知')}
+- 批次: {device_info.get('batch', '未知')}
+- 厂区: {device_info.get('factory', '未知')}
+
+## 三、全部测试日志（含通过项，用于全面了解设备状态）
 {chr(10).join([f"- [{l.get('test_time')}] {l.get('test_item')}: {l.get('fail_details', '通过')}" for l in test_logs[:10]])}
 
-维修历史：
-{chr(10).join([f"- [{r.get('date')}] {r.get('component')}: {r.get('action')}" for r in maintenance[:5]])}
+## 四、历史维修记录
+{chr(10).join([f"- [{r.get('date')}] 更换 {r.get('component')}：{r.get('action')}" for r in maintenance[:5]]) if maintenance else "无历史维修记录"}
 
-相似案例：
-{chr(10).join([f"- {c.get('title')}: {c.get('root_cause', '')}" for c in similar_cases[:3]])}
+## 五、相似历史案例
+{chr(10).join([f"- {c.get('title')}：根因={c.get('root_cause', '未知')}" for c in similar_cases[:3]]) if similar_cases else "未匹配到相似案例"}""")
 
-请以 JSON 格式返回：category, summary, confidence (0-1), suggestions"""
+        sections.append("""## 诊断要求
 
+请综合以上所有信息，结合你作为硬件工程师的专业知识（包括但不限于：Intel/AMD CPU 架构、DDR4/DDR5 内存子系统、PCIe 总线、电源管理、散热设计、BMC/IPMI 管理、固件交互），进行深度诊断分析。
+
+如有知识库参考文档，优先参考其中的技术方案；对于知识库未覆盖的部分，请运用你自身的工程经验进行推理和补充。
+
+请以 JSON 格式返回（所有字段为必填）：
+```json
+{
+  "category": "故障大类（如：内存故障、电源故障、CPU故障、存储故障、网络故障、散热故障、固件/BIOS故障、组装工艺问题、其他）",
+  "summary": "一段 100-200 字的诊断摘要，概述核心发现和诊断结论",
+  "confidence": 0.0-1.0,
+  "root_cause_detail": "详细的根因分析（200-400字），包含故障机理、可能的原因链条、为什么排除其他可能性",
+  "affected_components": ["受影响的硬件组件列表，如CPU1_Socket、DIMM_A4、PSU2等，如无法确定则返回空数组"],
+  "suggestions": ["3-5 条维修建议，每条包含具体操作步骤，按优先级从高到低排序"],
+  "preventive_measures": ["2-3 条预防措施，说明如何避免同类问题再次发生"]
+}
+```""")
+        return "\n\n".join(sections)
+
+    async def diagnose_sn(self, sn: str, device_info: dict, test_logs: list[dict],
+                          maintenance: list[dict], similar_cases: list[dict],
+                          kb_context: str = "", failed_logs: Optional[list[dict]] = None) -> dict:
+        prompt = self._build_sn_diagnosis_prompt(
+            sn, device_info, test_logs, maintenance, similar_cases, kb_context, failed_logs)
         return self._parse_json_response(
             await self.chat_completion([{"role": "system", "content": "硬件诊断工程师"},
                                         {"role": "user", "content": prompt}]),
-            {"category": "未知", "summary": "解析失败", "confidence": 0.5, "suggestions": ["联系技术支持"]}
+            self.SN_DIAGNOSIS_FALLBACK,
+        )
+
+    async def diagnose_sn_stream(self, sn: str, device_info: dict, test_logs: list[dict],
+                                  maintenance: list[dict], similar_cases: list[dict],
+                                  token_cb: Callable[[str], Awaitable[None]],
+                                  kb_context: str = "", failed_logs: Optional[list[dict]] = None) -> dict:
+        prompt = self._build_sn_diagnosis_prompt(
+            sn, device_info, test_logs, maintenance, similar_cases, kb_context, failed_logs)
+        return self._parse_json_response(
+            await self.chat_completion_stream(
+                [{"role": "system", "content": "硬件诊断工程师"},
+                 {"role": "user", "content": prompt}],
+                token_cb,
+            ),
+            self.SN_DIAGNOSIS_FALLBACK,
+        )
+
+    async def follow_up_question(self, question: str, diagnosis_context: str) -> str:
+        prompt = f"""你是一个专业的硬件诊断工程师。以下是之前对设备进行的诊断结果：
+
+{diagnosis_context}
+
+用户现在有一个追问：{question}
+
+请用中文回答用户的问题，保持专业、简洁、准确。基于已有的诊断结果回答，不要编造没有的信息。"""
+
+        return await self.chat_completion(
+            [{"role": "system", "content": "硬件诊断工程师"},
+             {"role": "user", "content": prompt}]
         )
 
     async def analyze_error(self, error_log: dict, similar_cases: list[dict]) -> dict:

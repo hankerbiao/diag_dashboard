@@ -1,11 +1,15 @@
-import { Bot } from 'lucide-react';
+import type { KeyboardEvent } from 'react';
+import { Bot, Loader2 } from 'lucide-react';
 
 interface DiagnosisInputProps {
   sn: string;
   onSnChange: (sn: string) => void;
+  onDiagnose: () => void;
+  loading: boolean;
+  onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void;
 }
 
-export default function DiagnosisInput({ sn, onSnChange }: DiagnosisInputProps) {
+export default function DiagnosisInput({ sn, onSnChange, onDiagnose, loading, onKeyDown }: DiagnosisInputProps) {
   return (
     <div
       className="h-16 border-b flex items-center px-6 gap-4 shadow-sm z-10 shrink-0"
@@ -34,6 +38,7 @@ export default function DiagnosisInput({ sn, onSnChange }: DiagnosisInputProps) 
           type="text"
           value={sn}
           onChange={(e) => onSnChange(e.target.value)}
+          onKeyDown={onKeyDown}
           className="bg-transparent text-sm w-full outline-none font-mono shrink"
           style={{
             color: 'var(--color-text-primary)',
@@ -42,13 +47,16 @@ export default function DiagnosisInput({ sn, onSnChange }: DiagnosisInputProps) 
         />
       </div>
       <button
-        className="text-white px-5 py-2 rounded-lg text-sm font-bold shadow-md transition-all flex items-center gap-2 active:scale-[0.98] shrink-0"
+        onClick={onDiagnose}
+        disabled={loading || !sn.trim()}
+        className="text-white px-5 py-2 rounded-lg text-sm font-bold shadow-md transition-all flex items-center gap-2 active:scale-[0.98] shrink-0 disabled:opacity-50"
         style={{
           backgroundColor: 'var(--color-accent)',
           boxShadow: '0 2px 10px -2px var(--color-shadow)',
         }}
       >
-        <Bot className="w-4 h-4" /> 大模型推理
+        {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
+        {loading ? '诊断中...' : '大模型推理'}
       </button>
     </div>
   );

@@ -28,14 +28,39 @@ class MaintenanceRecord(BaseModel):
     action: str
 
 
+class TestLogItem(BaseModel):
+    id: str
+    test_item: str
+    test_time: str
+    fail_details: str
+    fault_type1: str = ""
+    fault_type2: str = ""
+    fault_type3: str = ""
+    decision: str = ""
+    big_flow: str = ""
+    log_path: str = ""
+
+
+class SimilarCaseItem(BaseModel):
+    id: str
+    title: str
+    root_cause: str
+    similarity: float = 0.0
+
+
 class DiagnosisResponse(BaseModel):
     sn: str
     category: str
     summary: str
     confidence: float
+    root_cause_detail: str = ""
+    affected_components: list[str] = []
     suggestions: list[str]
+    preventive_measures: list[str] = []
     reference_logs: list[ReferenceLog]
     maintenance_history: list[MaintenanceRecord]
+    test_logs: list[TestLogItem] = []
+    similar_cases: list[SimilarCaseItem] = []
 
 
 class ErrorAnalysisResponse(BaseModel):

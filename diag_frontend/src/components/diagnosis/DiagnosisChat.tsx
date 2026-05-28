@@ -1,0 +1,129 @@
+import { useState, type KeyboardEvent } from 'react';
+import { ChevronUp, Loader2, Bot, User } from 'lucide-react';
+import { diagnosisApi } from '../../api/fastapi';
+
+interface Message { role: 'user' | 'assistant'; content: string }
+
+interface DiagnosisChatProps {
+  sn: string;
+  diagnosisContext: string;
+}
+
+export default function DiagnosisChat({ sn, diagnosisContext }: DiagnosisChatProps) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSend = async () => {
+    const q = input.trim();
+    if (!q || loading) return;
+    setInput('');
+    setMessages((prev) => [...prev, { role: 'user', content: q }]);
+    setLoading(true);
+    try {
+      const res = await diagnosisApi.followUp(sn, q, diagnosisContext);
+      if (res.success && res.data) {
+        setMessages((prev) => [...prev, { role: 'assistant', content: res.data.answer }]);
+      } else {
+        setMessages((prev) => [...prev, { role: 'assistant', content: res.error || '追问失败' }]);
+      }
+    } catch {
+      setMessages((prev) => [...prev, { role: 'assistant', content: '网络请求失败' }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  return (
+    <div
+      className="w-[380px] shrink-0 border-l flex flex-col min-h-0"
+      style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}
+    >
+      <div
+        className="px-4 py-3 border-b shrink-0 text-[12px] font-bold uppercase tracking-widest"
+        style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }}
+      >
+        AI 诊断对话
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar min-h-0">
+        {messages.length === 0 && (
+          <div className="flex items-center justify-center h-full">
+            <p className="text-[13px] text-center" style={{ color: 'var(--color-text-muted)' }}>
+              诊断完成后，可在此追问细节<br />例如"解释一下第三项建议的原理"
+            </p>
+          </div>
+        )}
+        {messages.map((m, i) => (
+          <div key={i} className={`flex gap-3 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
+            <div
+              className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
+              style={{
+                backgroundColor: m.role === 'assistant' ? 'var(--color-accent-light)' : 'var(--color-bg-secondary)',
+                border: `1px solid ${m.role === 'assistant' ? 'transparent' : 'var(--color-border)'}`,
+              }}
+            >
+              {m.role === 'assistant'
+                ? <Bot className="w-4 h-4" style={{ color: 'var(--color-accent)' }} />
+                : <User className="w-4 h-4" style={{ color: 'var(--color-text-secondary)' }} />
+              }
+            </div>
+            <div
+              className={`text-[13px] leading-relaxed rounded-xl px-3.5 py-2.5 max-w-[75%] whitespace-pre-wrap break-words ${m.role === 'user' ? 'text-right' : ''}`}
+              style={{
+                backgroundColor: m.role === 'assistant' ? 'var(--color-accent-light)' : 'var(--color-bg-secondary)',
+                color: 'var(--color-text-primary)',
+                border: `1px solid var(--color-border)`,
+              }}
+            >
+              {m.content}
+            </div>
+          </div>
+        ))}
+        {loading && (
+          <div className="flex gap-3">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: 'var(--color-accent-light)' }}>
+              <Bot className="w-4 h-4" style={{ color: 'var(--color-accent)' }} />
+            </div>
+            <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border" style={{ backgroundColor: 'var(--color-accent-light)', borderColor: 'var(--color-border)' }}>
+              <Loader2 className="w-4 h-4 animate-spin" style={{ color: 'var(--color-accent)' }} />
+              <span className="text-[13px]" style={{ color: 'var(--color-text-secondary)' }}>思考中...</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="p-3 border-t shrink-0 flex items-center gap-2" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-secondary)' }}>
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="追问诊断细节..."
+          disabled={loading}
+          className="flex-1 h-9 rounded-full px-4 text-[13px] outline-none border disabled:opacity-40"
+          style={{
+            backgroundColor: 'var(--color-bg-primary)',
+            borderColor: 'var(--color-border)',
+            color: 'var(--color-text-primary)',
+          }}
+        />
+        <button
+          onClick={handleSend}
+          disabled={loading || !input.trim()}
+          className="w-9 h-9 text-white rounded-full flex items-center justify-center shrink-0 transition-all hover:scale-105 active:scale-95 disabled:opacity-40 disabled:hover:scale-100"
+          style={{ backgroundColor: 'var(--color-accent)' }}
+        >
+          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ChevronUp className="w-5 h-5" />}
+        </button>
+      </div>
+    </div>
+  );
+}

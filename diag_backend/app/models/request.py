@@ -32,3 +32,9 @@ class KnowledgeDocUpdateRequest(BaseModel):
 
 class KnowledgeBaseSearchRequest(BaseModel):
     question: str
+
+
+class DiagnosisFollowUpRequest(BaseModel):
+    sn: str
+    question: str
+    diagnosis_context: str
