@@ -202,7 +202,7 @@ export default function AnalysisModal({
               style={{ backgroundColor: 'var(--color-accent-light)', borderColor: 'var(--color-border)' }}>
               {isAnalyzing && <div className="absolute top-0 left-0 w-full h-1 animate-pulse" style={{ backgroundColor: 'var(--color-accent)' }} />}
 
-              {isAnalyzing && !result ? (
+              {isAnalyzing ? (
                 <div className="flex flex-col justify-center flex-1 py-8 gap-1">
                   {STAGES.map((s) => <StageItem stage={s} progress={analyzingProgress} />)}
                   {analyzingProgress?.stage === 'llm' && streamingText && (
