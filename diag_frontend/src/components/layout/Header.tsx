@@ -93,7 +93,7 @@ export default function Header({ activeTab, factory, factories, onFactoryChange 
             </div>
             <div className="flex flex-col">
               <span
-                className="text-[13px] leading-tight font-bold"
+                className="text-[13px] leading-tight font-bold flex items-center gap-2"
                 style={{ color: 'var(--color-text-primary)' }}
               >
                 {user.email}

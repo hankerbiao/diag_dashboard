@@ -1,13 +1,14 @@
 import { useMemo, useState } from 'react';
 import { Bot, CheckCircle2, RefreshCw, ArrowUpDown, XCircle, Info, Download } from 'lucide-react';
 import type { ErrorLogRow } from '../../types';
+import type { DiagnosisCache } from '../../api/fastapi';
 import ResultBadge, { isFailureStatus } from '../common/ResultBadge';
 
 interface ErrorTableProps {
   data: ErrorLogRow[];
   loading: boolean;
   analyzingId: string | null;
-  analysisResult: Record<string, string>;
+  analysisResult: Record<string, DiagnosisCache>;
   onAnalyze: (id: string) => void;
   logBaseUrl?: string;
 }
@@ -122,10 +123,18 @@ export default function ErrorTable({ data, loading, analyzingId, analysisResult,
               <td className="px-5 py-3.5 text-center text-xs font-medium" style={{ color: 'var(--color-text-primary)' }}>
                 {translateDecision(row.decision)}
               </td>
-              <td className="px-5 py-3.5 max-w-[220px]">
-                <span className="text-xs leading-relaxed line-clamp-2" style={{ color: 'var(--color-text-secondary)' }}>
+              <td className="px-5 py-3.5 max-w-[260px]">
+                <span
+                  className="text-xs leading-relaxed line-clamp-2 block"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                  title={
+                    analysisResult[row.id]
+                      ? (analysisResult[row.id].root_cause || analysisResult[row.id].analysis || '')
+                      : undefined
+                  }
+                >
                   {analysisResult[row.id]
-                    ? analysisResult[row.id].slice(0, 60) + '…'
+                    ? (analysisResult[row.id].root_cause || analysisResult[row.id].analysis || '')
                     : row.faultTypes
                       ? `检测到异常类型 [${row.faultTypes}]，建议点击智能剖析获取根因分析。`
                       : '暂未检测到异常模式'}

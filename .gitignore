@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+
+# Scripts specific
+scripts/.ruff_cache/
+scripts/downloaded_docs/
+scripts/data/
+
+# Logs
+*.log
+
+# Environment files
+.env.local
+.env.*.local

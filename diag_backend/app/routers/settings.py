@@ -1,93 +1,102 @@
 """
-用户设置 API
+全局 AI 配置 API
 """
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..models.request import SettingsUpdateRequest
-from ..models.response import SettingsResponse, ApiResponse
-from ..core.auth import get_current_user
+from ..models.request import GlobalAiConfigUpdateRequest
+from ..models.response import ApiResponse
+from ..core.auth import get_current_user, require_role
 from ..core.mongodb import get_collection
 
 router = APIRouter(prefix="/settings", tags=["设置"])
 
 
-@router.get("", response_model=ApiResponse)
-async def get_settings(current_user: dict = Depends(get_current_user)):
-    """获取用户设置"""
-    try:
-        col = get_collection("app_settings")
-        settings_doc = await col.find_one({"user_id": current_user["id"]})
+def _mask_api_key(key: str) -> str:
+    if len(key) <= 6:
+        return "****"
+    return key[:3] + "****" + key[-3:]
 
-        if settings_doc:
+
+@router.get("/ai-config", response_model=ApiResponse)
+async def get_global_ai_config(current_user: dict = Depends(get_current_user)):
+    """获取全局 AI 配置（API Key 脱敏返回）"""
+    try:
+        col = get_collection("global_app_config")
+        config = await col.find_one({"_id": "ai_config"})
+
+        if config:
             return ApiResponse(
                 success=True,
-                data=SettingsResponse(
-                    ai_api_url=settings_doc.get("ai_api_url", "https://api.openai.com/v1"),
-                    ai_model=settings_doc.get("ai_model", "gpt-4-turbo"),
-                    ai_temperature=settings_doc.get("ai_temperature", 0.7),
-                    active_kbs=settings_doc.get("active_kbs", ["MES", "SIMS", "Case Library"])
-                )
+                data={
+                    "api_key": _mask_api_key(config.get("api_key", "")),
+                    "base_url": config.get("base_url", ""),
+                    "model": config.get("model", ""),
+                    "temperature": config.get("temperature", 0.7),
+                    "provider": config.get("provider", "openai"),
+                    "updated_at": config.get("updated_at", ""),
+                    "updated_by": config.get("updated_by", ""),
+                }
             )
 
-        # 默认设置
+        # 回退到环境变量默认值
+        from ..core.config import get_settings
+        s = get_settings()
         return ApiResponse(
             success=True,
-            data=SettingsResponse(
-                ai_api_url="https://api.openai.com/v1",
-                ai_model="gpt-4-turbo",
-                ai_temperature=0.7,
-                active_kbs=["MES", "SIMS", "Case Library"]
-            )
+            data={
+                "api_key": _mask_api_key(s.openai_api_key or ""),
+                "base_url": s.openai_api_url or "https://api.openai.com/v1",
+                "model": s.ai_model or "gpt-4-turbo",
+                "temperature": s.ai_temperature or 0.7,
+                "provider": "openai",
+                "updated_at": "",
+                "updated_by": "system",
+            }
         )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("", response_model=ApiResponse)
-async def update_settings(
-    request: SettingsUpdateRequest,
-    current_user: dict = Depends(get_current_user)
+@router.put("/ai-config", response_model=ApiResponse)
+async def update_global_ai_config(
+    request: GlobalAiConfigUpdateRequest,
+    current_user: dict = Depends(require_role(["admin"]))
 ):
-    """更新用户设置"""
+    """更新全局 AI 配置并热加载到 LLM 服务（仅 admin）"""
     try:
-        col = get_collection("app_settings")
+        col = get_collection("global_app_config")
 
-        # 构建更新数据
-        update_data = {
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
+        update_data = {}
+        if request.api_key is not None:
+            update_data["api_key"] = request.api_key
+        if request.base_url is not None:
+            update_data["base_url"] = request.base_url
+        if request.model is not None:
+            update_data["model"] = request.model
+        if request.temperature is not None:
+            update_data["temperature"] = request.temperature
+        if request.provider is not None:
+            update_data["provider"] = request.provider
 
-        if request.ai_api_url is not None:
-            update_data["ai_api_url"] = request.ai_api_url
-        if request.ai_api_key is not None:
-            update_data["ai_api_key"] = request.ai_api_key
-        if request.ai_model is not None:
-            update_data["ai_model"] = request.ai_model
-        if request.ai_temperature is not None:
-            update_data["ai_temperature"] = request.ai_temperature
-        if request.active_kbs is not None:
-            update_data["active_kbs"] = request.active_kbs
+        update_data["updated_by"] = current_user["id"]
+        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        # 检查是否存在
-        existing = await col.find_one({"user_id": current_user["id"]})
+        await col.update_one(
+            {"_id": "ai_config"},
+            {"$set": update_data},
+            upsert=True
+        )
 
-        if existing:
-            # 更新
-            await col.update_one(
-                {"user_id": current_user["id"]},
-                {"$set": update_data}
-            )
-        else:
-            # 创建
-            update_data["user_id"] = current_user["id"]
-            await col.insert_one(update_data)
+        # 热加载 LLM 服务
+        from ..services.llm_service import llm_service
+        await llm_service.reload_config()
 
         return ApiResponse(
             success=True,
-            message="设置已保存"
+            message="AI 配置已更新，LLM 服务已热加载"
         )
 
     except Exception as e:

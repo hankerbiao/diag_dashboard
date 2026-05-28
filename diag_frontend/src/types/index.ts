@@ -1,12 +1,14 @@
 export type NavigationTab = 'diagnosis' | 'error_logs' | 'knowledge_base' | 'settings';
 export type FactoryLocation = string;
 
-export interface AppSettings {
-  aiApiUrl: string;
-  aiApiKey: string;
-  aiModel: string;
-  aiTemperature: number;
-  activeKBs: string[];
+export interface GlobalAiConfig {
+  api_key: string;
+  base_url: string;
+  model: string;
+  temperature: number;
+  provider: string;
+  updated_at: string;
+  updated_by: string;
 }
 
 export interface SNAnalysisResult {
@@ -40,13 +42,6 @@ export interface ErrorLogRow {
   mesRecord: string;
 }
 
-export const DEFAULT_SETTINGS: AppSettings = {
-  aiApiUrl: 'https://api.openai.com/v1',
-  aiApiKey: '',
-  aiModel: 'gpt-4-turbo',
-  aiTemperature: 0.7,
-  activeKBs: ['MES', 'SIMS', 'Case Library']
-};
 
 export type {
   FaultCategoryItem,

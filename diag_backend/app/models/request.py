@@ -12,12 +12,12 @@ class DiagnosisByErrorLogRequest(BaseModel):
     error_log_id: str
 
 
-class SettingsUpdateRequest(BaseModel):
-    ai_api_url: Optional[str] = None
-    ai_api_key: Optional[str] = None
-    ai_model: Optional[str] = None
-    ai_temperature: Optional[float] = None
-    active_kbs: Optional[list[str]] = None
+class GlobalAiConfigUpdateRequest(BaseModel):
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    temperature: Optional[float] = None
+    provider: Optional[str] = None
 
 
 class ReAnalyzeRequest(BaseModel):

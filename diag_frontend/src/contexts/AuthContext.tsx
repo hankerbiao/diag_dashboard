@@ -4,6 +4,7 @@ import * as auth from '../api/auth';
 interface User {
   id: string;
   email: string;
+  role?: string;
 }
 
 interface AuthContextType {

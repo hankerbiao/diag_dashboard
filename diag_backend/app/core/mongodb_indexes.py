@@ -98,6 +98,11 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
         "computed_at", name="idx_analytics_snapshots_computed"
     )
 
+    # ---- diagnosis_cache ----
+    await db["diagnosis_cache"].create_index(
+        "error_log_id", unique=True, name="idx_diagnosis_cache_error_log_id"
+    )
+
     # ---- knowledge_documents ----
     await db["knowledge_documents"].create_index(
         "uploaded_at", name="idx_knowledge_docs_uploaded"
@@ -105,6 +110,9 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
     await db["knowledge_documents"].create_index(
         "title", name="idx_knowledge_docs_title"
     )
+
+    # ---- global_app_config ----
+    await db["global_app_config"].create_index("_id", name="idx_global_config_id")
 
     logger.info("MongoDB indexes ensured successfully")
 
@@ -142,4 +150,27 @@ async def seed_default_data(db: AsyncIOMotorDatabase):
             upsert=True
         )
 
+    # Seed global AI config from environment variables (first deploy only)
+    await seed_global_ai_config(db)
+
     logger.info("Default seed data ensured")
+
+
+async def seed_global_ai_config(db: AsyncIOMotorDatabase):
+    """从环境变量播种全局 AI 配置（首次部署时）"""
+    from .config import get_settings
+    env_settings = get_settings()
+    await db["global_app_config"].update_one(
+        {"_id": "ai_config"},
+        {"$setOnInsert": {
+            "_id": "ai_config",
+            "api_key": env_settings.openai_api_key or "",
+            "base_url": env_settings.openai_api_url or "https://api.openai.com/v1",
+            "model": env_settings.ai_model or "gpt-4-turbo",
+            "temperature": env_settings.ai_temperature or 0.7,
+            "provider": "openai",
+            "updated_by": "system",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+        upsert=True
+    )

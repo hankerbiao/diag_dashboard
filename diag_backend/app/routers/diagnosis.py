@@ -101,6 +101,8 @@ async def _download_log_tail(log_base_url: str, log_path: str, tail_lines: int =
         return ""
     url = f"{log_base_url.rstrip('/')}/{log_path.lstrip('/')}"
     try:
+        if url.startswith("ftp://"):
+            return await _download_log_tail_ftp(url, tail_lines)
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(url)
             resp.raise_for_status()
@@ -127,12 +129,46 @@ async def _download_log_tail(log_base_url: str, log_path: str, tail_lines: int =
         return ""
 
 
-def _build_cache_response(result: dict, log_id: str, sn: str, test_item: str, now: str) -> dict:
+async def _download_log_tail_ftp(url: str, tail_lines: int) -> str:
+    """通过 FTP 下载日志尾部内容"""
+    from urllib.parse import urlparse
+    import ftplib
+    import io
+
+    parsed = urlparse(url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 21
+    path = parsed.path or ""
+
+    try:
+        loop = asyncio.get_event_loop()
+        buf = io.BytesIO()
+
+        def _ftp_download():
+            ftp = ftplib.FTP()
+            ftp.connect(host, port, timeout=30)
+            ftp.login()  # anonymous
+            ftp.retrbinary(f"RETR {path}", buf.write)
+            ftp.quit()
+
+        await loop.run_in_executor(None, _ftp_download)
+        text = buf.getvalue().decode("utf-8", errors="replace")
+
+        if len(text) > MAX_LOG_BYTES:
+            text = text[-MAX_LOG_BYTES:]
+        lines = text.splitlines()
+        return "\n".join(lines[-tail_lines:] if len(lines) > tail_lines else lines)
+    except Exception as e:
+        logger.warning("FTP 日志下载失败 [%s]: %s", url, e)
+        return ""
+
+
+def _build_cache_response(cache_doc: dict, log_id: str, sn: str, test_item: str, now: str, doc_id: str) -> dict:
     return DiagnosisCacheResponse(
-        id=str(result.inserted_id), error_log_id=log_id, sn=sn, test_item=test_item,
-        root_cause=result.get("root_cause", ""), evidence=result.get("evidence", []),
-        analysis=result.get("analysis", ""), repair_suggestions=result.get("repair_suggestions", []),
-        knowledge_refs=result.get("knowledge_refs", []), log_content=result.get("log_content", ""),
+        id=doc_id, error_log_id=log_id, sn=sn, test_item=test_item,
+        root_cause=cache_doc.get("root_cause", ""), evidence=cache_doc.get("evidence", []),
+        analysis=cache_doc.get("analysis", ""), repair_suggestions=cache_doc.get("repair_suggestions", []),
+        knowledge_refs=cache_doc.get("knowledge_refs", []), log_content=cache_doc.get("log_content", ""),
         created_at=now, is_cached=False,
     ).model_dump()
 
@@ -199,7 +235,7 @@ async def _run_analysis(error_log_id: str, log_base_url: str,
     }
     insert_result = await get_collection("diagnosis_cache").insert_one(cache_doc)
 
-    return _build_cache_response(insert_result, error_log_id, cache_doc["sn"], cache_doc["test_item"], now)
+    return _build_cache_response(cache_doc, error_log_id, cache_doc["sn"], cache_doc["test_item"], now, str(insert_result.inserted_id))
 
 
 # ── 路由 ──

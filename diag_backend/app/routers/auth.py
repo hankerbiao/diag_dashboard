@@ -1,8 +1,9 @@
 """
 认证 API - 注册/登录
 """
-from datetime import timedelta
+from datetime import datetime, timedelta
 
+from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..models.auth import LoginRequest, RegisterRequest, AuthResponse, UserResponse
@@ -26,21 +27,24 @@ async def register(request: RegisterRequest):
             detail="Email already registered"
         )
 
-    # 创建用户
+    # 创建用户（默认角色 engineer）
     user_doc = {
         "email": request.email,
-        "password_hash": hash_password(request.password)
+        "password_hash": hash_password(request.password),
+        "role": "engineer",
+        "created_at": datetime.utcnow().isoformat(),
     }
     result = await col.insert_one(user_doc)
 
     # 生成 token
     user_id = str(result.inserted_id)
-    access_token = create_access_token(user_id, request.email)
+    access_token = create_access_token(user_id, request.email, role="engineer")
 
     return AuthResponse(
         access_token=access_token,
         user_id=user_id,
-        email=request.email
+        email=request.email,
+        role="engineer"
     )
 
 
@@ -66,6 +70,7 @@ async def login(request: LoginRequest):
 
     # 生成 token
     user_id = str(user["_id"])
+    role = user.get("role", "viewer")
 
     # 如果选择记住我，token 有效期设为 1 天
     if request.remember:
@@ -73,19 +78,28 @@ async def login(request: LoginRequest):
     else:
         expires_delta = None  # 使用默认配置
 
-    access_token = create_access_token(user_id, request.email, expires_delta)
+    access_token = create_access_token(user_id, request.email, expires_delta, role=role)
 
     return AuthResponse(
         access_token=access_token,
         user_id=user_id,
-        email=request.email
+        email=request.email,
+        role=role
     )
 
 
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: dict = Depends(get_current_user)):
     """获取当前用户信息"""
+    # 从数据库获取角色（JWT token 中可能没有最新角色）
+    col = get_collection("users")
+    try:
+        user_doc = await col.find_one({"_id": ObjectId(current_user["id"])})
+    except Exception:
+        user_doc = await col.find_one({"email": current_user["email"]})
+    role = user_doc.get("role", "viewer") if user_doc else current_user.get("role", "viewer")
     return UserResponse(
         id=current_user["id"],
-        email=current_user["email"]
+        email=current_user["email"],
+        role=role
     )

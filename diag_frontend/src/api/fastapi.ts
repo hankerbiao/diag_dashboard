@@ -72,11 +72,14 @@ export interface ErrorAnalysis {
   }>;
 }
 
-export interface Settings {
-  ai_api_url: string;
-  ai_model: string;
-  ai_temperature: number;
-  active_kbs: string[];
+export interface GlobalAiConfig {
+  api_key: string;
+  base_url: string;
+  model: string;
+  temperature: number;
+  provider: string;
+  updated_at: string;
+  updated_by: string;
 }
 
 export interface DiagnosisCache {
@@ -85,7 +88,7 @@ export interface DiagnosisCache {
   sn: string;
   test_item: string;
   root_cause: string;
-  evidence: string[];
+  evidence: Array<{ log_line: string; conclusion: string }>;
   analysis: string;
   repair_suggestions: string[];
   knowledge_refs: Array<{ source: string; content: string }>;
@@ -202,14 +205,19 @@ export const diagnosisApi = {
 
 // 设置 API
 export const settingsApi = {
-  async getSettings(): Promise<ApiResponse<Settings>> {
-    return fetchApi<Settings>('/api/settings');
+  async getAiConfig(): Promise<ApiResponse<GlobalAiConfig>> {
+    return fetchApi<GlobalAiConfig>('/api/settings/ai-config');
   },
 
-  async updateSettings(settings: Partial<Settings>): Promise<ApiResponse<void>> {
-    return fetchApi<void>('/api/settings', {
+  async updateAiConfig(config: {
+    api_key?: string;
+    base_url?: string;
+    model?: string;
+    temperature?: number;
+  }): Promise<ApiResponse<void>> {
+    return fetchApi<void>('/api/settings/ai-config', {
       method: 'PUT',
-      body: JSON.stringify(settings),
+      body: JSON.stringify(config),
     });
   },
 };

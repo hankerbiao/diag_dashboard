@@ -20,8 +20,10 @@ class AuthResponse(BaseModel):
     token_type: str = "bearer"
     user_id: str
     email: str
+    role: str = "engineer"
 
 
 class UserResponse(BaseModel):
     id: str
     email: str
+    role: str = "engineer"

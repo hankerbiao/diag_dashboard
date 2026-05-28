@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { X, Server, Cpu, MapPin, Clock, Hash, Activity, Router, XCircle, Search } from 'lucide-react';
 import type { ErrorLogRow } from '../../types';
-import type { SyncServer } from '../../api/fastapi';
+import type { SyncServer, DiagnosisCache } from '../../api/fastapi';
 import ErrorTable from './ErrorTable';
 
 interface ServerDetailModalProps {
@@ -9,7 +9,7 @@ interface ServerDetailModalProps {
   detailRows: ErrorLogRow[];
   detailsLoading: boolean;
   analyzingId: string | null;
-  analysisResult: Record<string, string>;
+  analysisResult: Record<string, DiagnosisCache>;
   onAnalyze: (id: string) => void;
   onClose: () => void;
   logBaseUrl?: string;

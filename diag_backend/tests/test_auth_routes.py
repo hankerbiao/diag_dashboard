@@ -134,15 +134,24 @@ class TestAuthMe:
     @pytest.mark.asyncio
     async def test_get_me_success(self, async_client, auth_headers: dict):
         """获取当前用户成功"""
-        response = await async_client.get(
-            "/api/auth/me",
-            headers=auth_headers
-        )
+        mock_collection = AsyncMock()
+        mock_collection.find_one = AsyncMock(return_value={
+            "_id": ObjectId(),
+            "email": "test@example.com",
+            "role": "engineer",
+        })
+
+        with patch("app.routers.auth.get_collection", return_value=mock_collection):
+            response = await async_client.get(
+                "/api/auth/me",
+                headers=auth_headers
+            )
 
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == "test-user-id-123"
         assert data["email"] == "test@example.com"
+        assert data["role"] == "engineer"
 
     @pytest.mark.asyncio
     async def test_get_me_no_token(self, async_client):

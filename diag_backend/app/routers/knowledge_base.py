@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPExcep
 from ..core.auth import get_current_user
 from ..core.config import get_settings
 from ..core.mongodb import get_collection
-from ..models.request import KnowledgeDocUpdateRequest
+from ..models.request import KnowledgeBaseSearchRequest, KnowledgeDocUpdateRequest
 from ..models.response import ApiResponse, KnowledgeDocResponse
 from ..services import ragflow_service
 
@@ -345,6 +345,34 @@ async def ragflow_status(current_user: dict = Depends(get_current_user)):
 # ════════════════════════════════════════════════════
 # 获取支持的格式
 # ════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════
+# 检索测试
+# ════════════════════════════════════════════════════
+
+
+@router.post("/search")
+async def search_knowledge_base(
+    body: KnowledgeBaseSearchRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """检索知识库 — 测试文档查询效果
+
+    固定参数：相似度阈值 0.2，向量相似度权重 0.3
+    """
+    try:
+        result = await ragflow_service.search_knowledge_base(
+            question=body.question,
+            similarity_threshold=0.2,
+            vector_similarity_weight=0.3,
+        )
+        return ApiResponse(success=True, data=result)
+    except Exception as e:
+        return ApiResponse(
+            success=False,
+            error=f"知识库检索失败: {str(e)}",
+        )
+
 
 @router.get("/formats")
 async def list_formats(current_user: dict = Depends(get_current_user)):

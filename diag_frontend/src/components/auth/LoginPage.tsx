@@ -8,7 +8,7 @@ import ParticleBackground from './ParticleBackground';
 const TAGLINES = [
   '智能分析每一条异常日志…',
   '基于知识图谱的深度诊断推理…',
-  '覆盖 10+ 厂区，实时数据同步…',
+  '覆盖所有厂区，实时数据同步…',
   '毫秒级 SN 诊断查询响应…',
   'AI 驱动的设备故障根因定位…',
 ];
@@ -16,8 +16,8 @@ const TAGLINES = [
 export default function LoginPage() {
   const { signIn, signUp } = useAuth();
   const [isRegister, setIsRegister] = useState(false);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('admin@admin.com');
+  const [password, setPassword] = useState('admin123');
   const [remember, setRemember] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');

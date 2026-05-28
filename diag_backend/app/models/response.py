@@ -73,11 +73,14 @@ class ErrorLogsStatsResponse(BaseModel):
     by_line: list[LineIssuesData]
 
 
-class SettingsResponse(BaseModel):
-    ai_api_url: str
-    ai_model: str
-    ai_temperature: float
-    active_kbs: list[str]
+class GlobalAiConfigResponse(BaseModel):
+    api_key: str
+    base_url: str
+    model: str
+    temperature: float
+    provider: str
+    updated_at: str
+    updated_by: str
 
 
 class ApiResponse(BaseModel):
@@ -104,7 +107,7 @@ class DiagnosisCacheResponse(BaseModel):
     sn: str
     test_item: str
     root_cause: str
-    evidence: list[str] = []
+    evidence: list[dict] = []
     analysis: str
     repair_suggestions: list[str]
     knowledge_refs: list[dict] = []

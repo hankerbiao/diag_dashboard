@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import type { NavigationTab, AppSettings } from './types';
-import { DEFAULT_SETTINGS } from './types';
+import type { NavigationTab } from './types';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { AuthProvider } from './contexts/AuthContext';
 import AuthGuard from './components/auth/AuthGuard';
@@ -16,7 +15,6 @@ import { analyticsApi, factoryApi, FactorySite } from './api/fastapi';
 function AppContent() {
   const { theme } = useTheme();
   const [activeTab, setActiveTab] = useState<NavigationTab>('diagnosis');
-  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [factorySites, setFactorySites] = useState<FactorySite[]>([]);
   const [factory, setFactory] = useState('');
 
@@ -60,13 +58,13 @@ function AppContent() {
           className="flex-1 flex flex-col min-h-0 relative"
           style={{ backgroundColor: 'var(--color-bg-primary)' }}
         >
-          {activeTab === 'diagnosis' && <DiagnosisTab settings={settings} factory={factory} factorySites={factorySites} />}
+          {activeTab === 'diagnosis' && <DiagnosisTab factory={factory} factorySites={factorySites} />}
           {activeTab === 'error_logs' && <ErrorLogsTab factory={factory} factorySites={factorySites} />}
           {activeTab === 'knowledge_base' && <KnowledgeBaseTab />}
-          {activeTab === 'settings' && <SettingsTab settings={settings} setSettings={setSettings} />}
+          {activeTab === 'settings' && <SettingsTab />}
         </div>
 
-        <Footer activeKBsCount={settings.activeKBs.length} />
+        <Footer />
       </div>
     </div>
   );

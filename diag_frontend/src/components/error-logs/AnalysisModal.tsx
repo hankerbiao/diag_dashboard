@@ -226,11 +226,16 @@ export default function AnalysisModal({
                       <h5 className="flex items-center gap-1.5 text-xs font-bold" style={{ color: '#d97706' }}>
                         <Terminal className="w-3.5 h-3.5" /> 关键证据
                       </h5>
-                      <ul className="text-[12px] space-y-2 p-3.5 rounded-lg border shadow-sm font-mono" style={S.mono}>
+                      <ul className="text-[12px] space-y-3 p-3.5 rounded-lg border shadow-sm font-mono" style={S.mono}>
                         {result.evidence.map((e, i) => (
-                          <li key={i} className="flex gap-2 leading-relaxed">
-                            <span className="text-amber-400 font-bold shrink-0">[{i + 1}]</span>
-                            <span>{e}</span>
+                          <li key={i} className="leading-relaxed">
+                            <div className="flex gap-2">
+                              <span className="text-amber-400 font-bold shrink-0">[{i + 1}]</span>
+                              <span>{e.log_line}</span>
+                            </div>
+                            {e.conclusion && (
+                              <div className="mt-1 ml-5 text-[11px] text-slate-400">→ {e.conclusion}</div>
+                            )}
                           </li>
                         ))}
                       </ul>
