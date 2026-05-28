@@ -79,6 +79,26 @@ export interface DiagnosisResult {
   similar_cases: SimilarCaseItem[];
 }
 
+export interface SnHistoryItem {
+  id: string;
+  sn: string;
+  factory: string;
+  category: string;
+  confidence: number;
+  summary: string;
+  created_at: string;
+}
+
+export interface SnHistoryDetail {
+  id: string;
+  sn: string;
+  factory: string;
+  diagnosis_result: DiagnosisResult;
+  chat_messages: Array<{ role: string; content: string }>;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ErrorAnalysis {
   error_log: {
     id: string;
@@ -259,6 +279,36 @@ export const diagnosisApi = {
     return fetchApi<DiagnosisCache>(`/api/diagnosis/error-log/${errorLogId}/re-analyze${params}`, {
       method: 'POST',
     });
+  },
+
+  // SN 诊断历史记录
+  async saveSnHistory(sn: string, factory: string, diagnosisResult: object): Promise<ApiResponse<{ id: string }>> {
+    return fetchApi<{ id: string }>('/api/diagnosis/sn/save-history', {
+      method: 'POST',
+      body: JSON.stringify({ sn, factory, diagnosis_result: diagnosisResult }),
+    });
+  },
+
+  async appendChatMessage(historyId: string, role: string, content: string): Promise<ApiResponse<void>> {
+    return fetchApi<void>(`/api/diagnosis/sn/history/${historyId}/chat`, {
+      method: 'PUT',
+      body: JSON.stringify({ role, content }),
+    });
+  },
+
+  async getSnHistoryList(params: {
+    sn?: string; factory?: string; page?: number; limit?: number;
+  }): Promise<ApiResponse<{ items: SnHistoryItem[]; total: number; page: number; limit: number }>> {
+    const query = new URLSearchParams();
+    if (params.sn) query.set('sn', params.sn);
+    if (params.factory) query.set('factory', params.factory);
+    if (params.page) query.set('page', String(params.page));
+    if (params.limit) query.set('limit', String(params.limit));
+    return fetchApi(`/api/diagnosis/sn/history?${query.toString()}`);
+  },
+
+  async getSnHistoryDetail(historyId: string): Promise<ApiResponse<SnHistoryDetail>> {
+    return fetchApi<SnHistoryDetail>(`/api/diagnosis/sn/history/${historyId}`);
   },
 };
 

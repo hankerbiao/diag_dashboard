@@ -1,10 +1,11 @@
-import { useState, useCallback, type KeyboardEvent } from 'react';
-import { Bot, RefreshCw } from 'lucide-react';
-import type { FactorySite, DiagnosisResult as DiagnosisResultType } from '../../api/fastapi';
+import { useState, useCallback, useEffect, type KeyboardEvent } from 'react';
+import { Bot, RefreshCw, Clock, ChevronRight } from 'lucide-react';
+import type { FactorySite, DiagnosisResult as DiagnosisResultType, SnHistoryItem as SnHistoryItemType } from '../../api/fastapi';
 import { diagnosisApi } from '../../api/fastapi';
 import DiagnosisInput from './DiagnosisInput';
 import DiagnosisResult from './DiagnosisResult';
-import DiagnosisChat from './DiagnosisChat';
+import DiagnosisChat, { type ChatMessage } from './DiagnosisChat';
+import DiagnosisHistoryModal from './DiagnosisHistoryModal';
 
 interface DiagnosisTabProps {
   factory: string;
@@ -58,13 +59,42 @@ function buildDiagnosisContext(result: DiagnosisResultType): string {
 建议措施: ${result.suggestions.join('; ')}`;
 }
 
-export default function DiagnosisTab({ factory, factorySites }: DiagnosisTabProps) {
+export default function DiagnosisTab({ factory }: DiagnosisTabProps) {
   const [sn, setSn] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<DiagnosisResultType | null>(null);
   const [error, setError] = useState('');
   const [progress, setProgress] = useState<{ stage: string; detail: string } | null>(null);
   const [streamingToken, setStreamingToken] = useState('');
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [historyId, setHistoryId] = useState<string | null>(null);
+  const [historyList, setHistoryList] = useState<SnHistoryItemType[]>([]);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
+
+  // 页面加载时查询所有历史诊断记录
+  const fetchHistory = useCallback(async () => {
+    try {
+      const res = await diagnosisApi.getSnHistoryList({ limit: 20 });
+      if (res.success && res.data) {
+        setHistoryList(res.data.items);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => { fetchHistory(); }, [fetchHistory]);
+
+  const persistDiagnosis = useCallback(async (snVal: string, factoryVal: string, data: DiagnosisResultType) => {
+    try {
+      const saveRes = await diagnosisApi.saveSnHistory(snVal, factoryVal, data as unknown as Record<string, unknown>);
+      if (saveRes.success && saveRes.data) {
+        setHistoryId(saveRes.data.id);
+        setActiveHistoryId(saveRes.data.id);
+      }
+    } catch { /* save silently */ }
+    fetchHistory();
+  }, [fetchHistory]);
 
   const handleDiagnose = useCallback(() => {
     if (!sn.trim()) return;
@@ -73,6 +103,9 @@ export default function DiagnosisTab({ factory, factorySites }: DiagnosisTabProp
     setResult(null);
     setProgress(null);
     setStreamingToken('');
+    setChatMessages([]);
+    setHistoryId(null);
+    setActiveHistoryId(null);
 
     diagnosisApi.diagnoseBySNSse(
       sn.trim(),
@@ -81,10 +114,11 @@ export default function DiagnosisTab({ factory, factorySites }: DiagnosisTabProp
         setProgress({ stage, detail });
         if (stage !== 'llm') setStreamingToken('');
       },
-      (data) => {
+      async (data) => {
         setResult(data);
         setLoading(false);
         setProgress(null);
+        persistDiagnosis(sn.trim(), factory, data as unknown as Record<string, unknown>);
       },
       (msg) => {
         setError(msg);
@@ -95,7 +129,50 @@ export default function DiagnosisTab({ factory, factorySites }: DiagnosisTabProp
         setStreamingToken((prev) => prev + token);
       },
     );
-  }, [sn, factory]);
+  }, [sn, factory, persistDiagnosis]);
+
+  const handleChatSend = useCallback(async (question: string) => {
+    if (!result) return;
+    const userMsg: ChatMessage = { role: 'user', content: question };
+    setChatMessages((prev) => [...prev, userMsg]);
+    setChatLoading(true);
+
+    try {
+      const res = await diagnosisApi.followUp(sn.trim(), question, buildDiagnosisContext(result));
+      if (res.success && res.data) {
+        const assistantMsg: ChatMessage = { role: 'assistant', content: res.data.answer };
+        setChatMessages((prev) => [...prev, assistantMsg]);
+        // 保存对话到历史
+        if (historyId) {
+          diagnosisApi.appendChatMessage(historyId, 'user', question).catch(() => {});
+          diagnosisApi.appendChatMessage(historyId, 'assistant', res.data.answer).catch(() => {});
+        }
+      } else {
+        setChatMessages((prev) => [...prev, { role: 'assistant', content: res.error || '追问失败' }]);
+      }
+    } catch {
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: '网络请求失败' }]);
+    } finally {
+      setChatLoading(false);
+    }
+  }, [result, sn, historyId]);
+
+  const handleHistoryClick = async (item: SnHistoryItemType) => {
+    if (item.id === activeHistoryId) return;
+    try {
+      const res = await diagnosisApi.getSnHistoryDetail(item.id);
+      if (res.success && res.data) {
+        setResult(res.data.diagnosis_result);
+        setChatMessages(res.data.chat_messages as ChatMessage[]);
+        setActiveHistoryId(item.id);
+        setHistoryId(item.id);
+        setError('');
+        setLoading(false);
+        setProgress(null);
+        setStreamingToken('');
+      }
+    } catch { /* ignore */ }
+  };
 
   const handleSnKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') handleDiagnose();
@@ -113,6 +190,30 @@ export default function DiagnosisTab({ factory, factorySites }: DiagnosisTabProp
         loading={loading}
         onKeyDown={handleSnKeyDown}
       />
+
+      {/* 历史诊断记录 — 按钮弹出窗口 */}
+      {historyList.length > 0 && !loading && (
+        <div className="px-6 py-2 border-b shrink-0" style={{ borderColor: 'var(--color-border)' }}>
+          <button
+            onClick={() => setHistoryExpanded(true)}
+            className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-widest"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            <Clock className="w-3.5 h-3.5" />
+            历史诊断记录（{historyList.length}）
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {historyExpanded && (
+        <DiagnosisHistoryModal
+          items={historyList}
+          activeId={activeHistoryId}
+          onClose={() => setHistoryExpanded(false)}
+          onSelect={handleHistoryClick}
+        />
+      )}
 
       <div className="flex-1 flex min-h-0">
         {loading ? (
@@ -160,10 +261,16 @@ export default function DiagnosisTab({ factory, factorySites }: DiagnosisTabProp
           </div>
         ) : result ? (
           <div className="flex-1 flex min-h-0">
-            <div className="flex-1 flex min-h-0">
-              <DiagnosisResult result={result} factory={factory} />
+            <div className="flex-1 flex min-h-0 relative">
+              <div className="flex-1 flex min-h-0">
+                <DiagnosisResult result={result} factory={factory} />
+              </div>
+              <DiagnosisChat
+                messages={chatMessages}
+                loading={chatLoading}
+                onSend={handleChatSend}
+              />
             </div>
-            <DiagnosisChat sn={sn} diagnosisContext={buildDiagnosisContext(result)} />
           </div>
         ) : (
           <div className="flex-1 flex items-center justify-center p-8">

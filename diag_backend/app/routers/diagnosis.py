@@ -12,8 +12,10 @@ from fastapi.responses import StreamingResponse
 from ..core.auth import get_current_user
 from ..core.mongodb import get_collection
 from ..core.factory_config import get_factory_by_id
-from ..models.request import DiagnosisBySNRequest, DiagnosisByErrorLogRequest, DiagnosisFollowUpRequest
-from ..models.response import ApiResponse, DiagnosisCacheResponse, DiagnosisResponse, ErrorAnalysisResponse
+from ..models.request import (DiagnosisBySNRequest, DiagnosisByErrorLogRequest,
+                               DiagnosisFollowUpRequest, SaveSnHistoryRequest, AppendChatRequest)
+from ..models.response import (ApiResponse, DiagnosisCacheResponse, DiagnosisResponse,
+                               ErrorAnalysisResponse, SnHistoryItem, SnHistoryDetail)
 from ..services.llm_service import llm_service
 from ..services.knowledge_graph import knowledge_graph
 from ..services import ragflow_service
@@ -447,3 +449,99 @@ async def diagnose_sn_stream(request: DiagnosisBySNRequest, current_user: dict =
         return _build_sn_response(request.sn, diagnosis, maintenance, all_logs, similar_cases).model_dump()
 
     return StreamingResponse(_sse_wrap(_runner), media_type="text/event-stream")
+
+
+# ── SN 诊断历史记录 ──
+
+
+@router.post("/sn/save-history", response_model=ApiResponse)
+async def save_sn_history(request: SaveSnHistoryRequest, current_user: dict = Depends(get_current_user)):
+    """保存 SN 诊断结果到历史记录"""
+    try:
+        result = request.diagnosis_result
+        doc = {
+            "sn": request.sn,
+            "factory": request.factory,
+            "category": result.get("category", ""),
+            "confidence": result.get("confidence", 0.0),
+            "summary": result.get("summary", ""),
+            "diagnosis_result": result,
+            "chat_messages": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        col = get_collection("diagnosis_sn_history")
+        insert_result = await col.insert_one(doc)
+        return ApiResponse(success=True, data={"id": str(insert_result.inserted_id)})
+    except Exception as e:
+        logger.exception("保存诊断历史失败")
+        return ApiResponse(success=False, error=f"保存失败: {e}")
+
+
+@router.put("/sn/history/{history_id}/chat", response_model=ApiResponse)
+async def append_chat_message(history_id: str, request: AppendChatRequest,
+                               current_user: dict = Depends(get_current_user)):
+    """追加对话消息到历史记录"""
+    try:
+        col = get_collection("diagnosis_sn_history")
+        result = await col.update_one(
+            {"_id": ObjectId(history_id)},
+            {"$push": {"chat_messages": {"role": request.role, "content": request.content}},
+             "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        if result.matched_count == 0:
+            return ApiResponse(success=False, error="历史记录不存在")
+        return ApiResponse(success=True)
+    except Exception as e:
+        logger.exception("追加对话失败")
+        return ApiResponse(success=False, error=f"追加失败: {e}")
+
+
+@router.get("/sn/history", response_model=ApiResponse)
+async def list_sn_history(sn: str = Query(""), factory: str = Query(""),
+                           page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=100),
+                           current_user: dict = Depends(get_current_user)):
+    """查询 SN 诊断历史记录列表"""
+    try:
+        col = get_collection("diagnosis_sn_history")
+        query = {}
+        if sn:
+            query["sn"] = sn
+        if factory:
+            query["factory"] = factory
+
+        total = await col.count_documents(query)
+        docs = await col.find(query, {"diagnosis_result": 0}).sort("created_at", -1) \
+            .skip((page - 1) * limit).limit(limit).to_list(limit)
+
+        items = [SnHistoryItem(
+            id=str(d["_id"]), sn=d["sn"], factory=d.get("factory", ""),
+            category=d.get("category", ""), confidence=d.get("confidence", 0.0),
+            summary=d.get("summary", ""), created_at=d["created_at"],
+        ) for d in docs]
+
+        return ApiResponse(success=True, data={"items": [i.model_dump() for i in items], "total": total,
+                                                "page": page, "limit": limit})
+    except Exception as e:
+        logger.exception("查询诊断历史失败")
+        return ApiResponse(success=False, error=f"查询失败: {e}")
+
+
+@router.get("/sn/history/{history_id}", response_model=ApiResponse)
+async def get_sn_history_detail(history_id: str, current_user: dict = Depends(get_current_user)):
+    """查询单条诊断历史完整记录（含对话）"""
+    try:
+        col = get_collection("diagnosis_sn_history")
+        doc = await col.find_one({"_id": ObjectId(history_id)})
+        if not doc:
+            return ApiResponse(success=False, error="历史记录不存在")
+
+        return ApiResponse(success=True, data=SnHistoryDetail(
+            id=str(doc["_id"]), sn=doc["sn"], factory=doc.get("factory", ""),
+            diagnosis_result=doc.get("diagnosis_result", {}),
+            chat_messages=doc.get("chat_messages", []),
+            created_at=doc["created_at"], updated_at=doc.get("updated_at", doc["created_at"]),
+        ).model_dump())
+    except Exception as e:
+        logger.exception("查询诊断历史详情失败")
+        return ApiResponse(success=False, error=f"查询失败: {e}")

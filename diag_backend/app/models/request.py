@@ -38,3 +38,14 @@ class DiagnosisFollowUpRequest(BaseModel):
     sn: str
     question: str
     diagnosis_context: str
+
+
+class SaveSnHistoryRequest(BaseModel):
+    sn: str
+    factory: str
+    diagnosis_result: dict
+
+
+class AppendChatRequest(BaseModel):
+    role: str
+    content: str

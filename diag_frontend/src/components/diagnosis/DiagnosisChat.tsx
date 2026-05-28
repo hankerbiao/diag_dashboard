@@ -1,37 +1,22 @@
 import { useState, type KeyboardEvent } from 'react';
 import { ChevronUp, Loader2, Bot, User } from 'lucide-react';
-import { diagnosisApi } from '../../api/fastapi';
 
-interface Message { role: 'user' | 'assistant'; content: string }
+export interface ChatMessage { role: 'user' | 'assistant'; content: string }
 
 interface DiagnosisChatProps {
-  sn: string;
-  diagnosisContext: string;
+  messages: ChatMessage[];
+  loading: boolean;
+  onSend: (question: string) => void;
 }
 
-export default function DiagnosisChat({ sn, diagnosisContext }: DiagnosisChatProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
+export default function DiagnosisChat({ messages, loading, onSend }: DiagnosisChatProps) {
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
 
-  const handleSend = async () => {
+  const handleSend = () => {
     const q = input.trim();
     if (!q || loading) return;
     setInput('');
-    setMessages((prev) => [...prev, { role: 'user', content: q }]);
-    setLoading(true);
-    try {
-      const res = await diagnosisApi.followUp(sn, q, diagnosisContext);
-      if (res.success && res.data) {
-        setMessages((prev) => [...prev, { role: 'assistant', content: res.data.answer }]);
-      } else {
-        setMessages((prev) => [...prev, { role: 'assistant', content: res.error || '追问失败' }]);
-      }
-    } catch {
-      setMessages((prev) => [...prev, { role: 'assistant', content: '网络请求失败' }]);
-    } finally {
-      setLoading(false);
-    }
+    onSend(q);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {

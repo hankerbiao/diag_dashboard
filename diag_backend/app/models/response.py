@@ -148,3 +148,23 @@ class PaginatedResponse(BaseModel):
     limit: int
 
 
+class SnHistoryItem(BaseModel):
+    id: str
+    sn: str
+    factory: str
+    category: str
+    confidence: float
+    summary: str
+    created_at: str
+
+
+class SnHistoryDetail(BaseModel):
+    id: str
+    sn: str
+    factory: str
+    diagnosis_result: dict
+    chat_messages: list[dict] = []
+    created_at: str
+    updated_at: str
+
+

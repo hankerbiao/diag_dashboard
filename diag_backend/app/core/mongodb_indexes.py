@@ -103,6 +103,14 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
         "error_log_id", unique=True, name="idx_diagnosis_cache_error_log_id"
     )
 
+    # ---- diagnosis_sn_history ----
+    await db["diagnosis_sn_history"].create_index(
+        "sn", name="idx_diagnosis_sn_history_sn"
+    )
+    await db["diagnosis_sn_history"].create_index(
+        [("sn", 1), ("created_at", -1)], name="idx_diagnosis_sn_history_sn_time"
+    )
+
     # ---- knowledge_documents ----
     await db["knowledge_documents"].create_index(
         "uploaded_at", name="idx_knowledge_docs_uploaded"
