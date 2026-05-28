@@ -158,6 +158,21 @@ async def seed_default_data(db: AsyncIOMotorDatabase):
             upsert=True
         )
 
+    # Seed MES global auto-sync config
+    await db["auto_sync_configs"].update_one(
+        {"factory_id": "__mes__"},
+        {"$setOnInsert": {
+            "factory_id": "__mes__",
+            "sync_type": "mes",
+            "enabled": False,
+            "interval_minutes": 1440,
+            "cutoff_hours": 24,
+            "last_run_at": None,
+            "updated_at": now,
+        }},
+        upsert=True,
+    )
+
     # Seed global AI config from environment variables (first deploy only)
     await seed_global_ai_config(db)
 

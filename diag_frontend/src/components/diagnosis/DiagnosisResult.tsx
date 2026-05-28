@@ -142,7 +142,7 @@ export default function DiagnosisResult({ result, factory }: DiagnosisResultProp
                 color: 'var(--color-text-primary)',
               }}
             >
-              针对序列号{' '}
+              海光DCU算力平台针对序列号{' '}
               <strong
                 className="font-mono px-1 py-0.5 rounded shadow-sm"
                 style={{

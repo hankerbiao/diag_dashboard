@@ -1,5 +1,5 @@
 import { useState, useEffect, useImperativeHandle, forwardRef } from 'react';
-import { Sliders, Key, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Sliders, Key, Loader2, CheckCircle2, AlertCircle, Cpu } from 'lucide-react';
 import { settingsApi } from '../../api/fastapi';
 
 export interface ApiConfigHandle {
@@ -93,8 +93,19 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
           }}
         >
           <Sliders className="w-5 h-5" style={{ color: 'var(--color-accent)' }} />
-          <h2 className="text-base font-bold" style={{ color: 'var(--color-text-primary)' }}>
+          <h2 className="text-base font-bold flex items-center gap-2" style={{ color: 'var(--color-text-primary)' }}>
             AI 大模型中枢引擎配置
+            <span
+              className="text-[10px] font-bold px-2 py-0.5 rounded-md border flex items-center gap-1"
+              style={{
+                color: 'var(--color-accent)',
+                borderColor: 'var(--color-accent)',
+                backgroundColor: 'var(--color-accent-light)',
+              }}
+            >
+              <Cpu className="w-3 h-3" />
+              海光DCU
+            </span>
           </h2>
           <span
             className="ml-auto text-[11px] font-bold px-2.5 py-1 rounded-full uppercase tracking-widest"

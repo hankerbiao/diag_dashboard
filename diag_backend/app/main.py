@@ -20,9 +20,15 @@ async def lifespan(app: FastAPI):
     analytics_service = get_analytics_service()
     analytics_service.start_scheduler()
 
+    # startup: 启动数据同步调度器 (SIMS + MES)
+    from .services.sync_scheduler_service import get_sync_scheduler_service
+    sync_scheduler = get_sync_scheduler_service()
+    sync_scheduler.start_scheduler()
+
     yield
 
-    # shutdown: 停止调度器、关闭连接
+    # shutdown: 先停同步调度器，再停分析看板，最后关 MongoDB
+    await sync_scheduler.stop_scheduler()
     await analytics_service.stop_scheduler()
     await close_mongodb()
 

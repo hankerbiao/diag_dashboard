@@ -381,6 +381,45 @@ export interface PaginatedResponse<T> {
   limit: number;
 }
 
+// 自动同步配置类型
+export interface AutoSyncFactoryConfig {
+  factory_id: string;
+  enabled: boolean;
+  interval_minutes: number;
+  cutoff_hours: number | null;
+  last_run_at: string | null;
+}
+
+export interface AutoSyncSimsConfig {
+  enabled: boolean;
+  interval_minutes: number;
+  factories: AutoSyncFactoryConfig[];
+}
+
+export interface AutoSyncMesConfig {
+  enabled: boolean;
+  interval_minutes: number;
+  cutoff_hours: number | null;
+  last_run_at: string | null;
+}
+
+export interface AutoSyncConfig {
+  sims: AutoSyncSimsConfig;
+  mes: AutoSyncMesConfig;
+}
+
+export interface SyncJobItem {
+  id: string;
+  factory_id: string;
+  sync_type: string;
+  status: string;
+  started_at: string;
+  completed_at?: string;
+  triggered_by: string;
+  output?: string;
+  error?: string;
+}
+
 // 数据查询 API（只读 — 数据由独立脚本同步）
 export const syncApi = {
   async getServers(params: {
@@ -408,6 +447,50 @@ export const syncApi = {
     if (params?.page) query.set('page', String(params.page));
     if (params?.limit) query.set('limit', String(params.limit));
     return fetchApi<PaginatedResponse<SyncTestDetail>>(`/api/sync/servers/${serverSn}/test-details?${query.toString()}`);
+  },
+
+  async getJobs(params?: {
+    factory_id?: string; page?: number; limit?: number;
+  }): Promise<ApiResponse<PaginatedResponse<SyncJobItem>>> {
+    const query = new URLSearchParams();
+    if (params?.factory_id) query.set('factory_id', params.factory_id);
+    if (params?.page) query.set('page', String(params.page ?? 1));
+    if (params?.limit) query.set('limit', String(params.limit ?? 5));
+    return fetchApi<PaginatedResponse<SyncJobItem>>(`/api/sync/jobs?${query.toString()}`);
+  },
+
+  async getAutoConfig(): Promise<ApiResponse<AutoSyncConfig>> {
+    return fetchApi<AutoSyncConfig>('/api/sync/auto-config');
+  },
+
+  async updateAutoConfig(config: {
+    sims_enabled?: boolean;
+    sims_interval_minutes?: number;
+    factory_overrides?: Record<string, {
+      enabled?: boolean;
+      interval_minutes?: number;
+      cutoff_hours?: number;
+    }>;
+    mes_enabled?: boolean;
+    mes_interval_minutes?: number;
+  }): Promise<ApiResponse<AutoSyncConfig>> {
+    return fetchApi<AutoSyncConfig>('/api/sync/auto-config', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    });
+  },
+
+  async triggerSync(factory?: string): Promise<ApiResponse<{ job_id: string; status: string }>> {
+    const params = factory ? `?factory=${encodeURIComponent(factory)}` : '';
+    return fetchApi<{ job_id: string; status: string }>(`/api/sync/trigger${params}`, {
+      method: 'POST',
+    });
+  },
+
+  async triggerMesSync(): Promise<ApiResponse<{ job_id: string; status: string }>> {
+    return fetchApi<{ job_id: string; status: string }>('/api/sync/trigger-mes', {
+      method: 'POST',
+    });
   },
 };
 

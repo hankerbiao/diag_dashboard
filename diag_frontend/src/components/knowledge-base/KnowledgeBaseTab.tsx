@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import {
   AlertCircle, Database, FileArchive, Search,
-  CheckCircle2, Clock, RefreshCw, Trash2,
+  CheckCircle2, Clock, RefreshCw, Trash2, Cpu,
 } from 'lucide-react';
 import { knowledgeBaseApi, KnowledgeDoc } from '../../api/fastapi';
 import UploadZone from './UploadZone';
@@ -183,10 +183,10 @@ export default function KnowledgeBaseTab() {
         <div>
           <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
             <Database className="w-5 h-5 text-blue-600" />
-            RAG 领域知识库录入 (所有厂区共用)
+            海光DCU | RAG 领域知识库录入 (所有厂区共用)
           </h2>
           <p className="text-[13px] text-slate-500 mt-1 max-w-2xl leading-relaxed">
-            上传常见格式的历史维修文档、SOP教程、机身图解及日志规范。所有文件将自动通过 OCR 与文档切分引擎处理，并向量化入库，随后将作为大模型深度诊断参考。
+            上传常见格式的历史维修文档、SOP教程、机身图解及日志规范。所有文件将自动通过 OCR 与文档切分引擎处理，并向量化入库，部署于海光DCU服务器上作为大模型深度诊断参考。
           </p>
         </div>
         <div className="flex shrink-0">

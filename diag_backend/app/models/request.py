@@ -49,3 +49,17 @@ class SaveSnHistoryRequest(BaseModel):
 class AppendChatRequest(BaseModel):
     role: str
     content: str
+
+
+class FactoryOverride(BaseModel):
+    enabled: Optional[bool] = None
+    interval_minutes: Optional[int] = None
+    cutoff_hours: Optional[int] = None
+
+
+class AutoSyncConfigUpdateRequest(BaseModel):
+    sims_enabled: Optional[bool] = None
+    sims_interval_minutes: Optional[int] = None
+    factory_overrides: Optional[dict[str, FactoryOverride]] = None
+    mes_enabled: Optional[bool] = None
+    mes_interval_minutes: Optional[int] = None

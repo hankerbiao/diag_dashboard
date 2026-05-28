@@ -290,7 +290,7 @@ export default function DiagnosisTab({ factory }: DiagnosisTabProps) {
                     AI 智能诊断
                   </h2>
                   <p className="text-sm mt-1" style={{ color: 'var(--color-text-secondary)' }}>
-                    输入产品序列号，一键触发全链路智能分析
+                    基于海光DCU算力，输入产品序列号一键触发全链路智能分析
                   </p>
                 </div>
               </div>
@@ -298,7 +298,7 @@ export default function DiagnosisTab({ factory }: DiagnosisTabProps) {
               <div className="grid grid-cols-3 gap-3">
                 {[
                   { icon: '🔍', title: '数据聚合', desc: '测试日志 + 维修记录' },
-                  { icon: '🧠', title: 'AI 推理', desc: '大模型深度诊断分析' },
+                  { icon: '🧠', title: 'AI 推理', desc: '海光DCU大模型深度诊断' },
                   { icon: '📋', title: '案例匹配', desc: '历史知识图谱关联' },
                 ].map((f) => (
                   <div
@@ -360,7 +360,7 @@ export default function DiagnosisTab({ factory }: DiagnosisTabProps) {
                     color: 'var(--color-text-secondary)',
                   }}
                 >
-                  系统将自动聚合设备测试数据、维修记录与历史案例库，通过大模型推理生成故障原因分析及标准修复建议。
+                  系统运行在海光DCU加速服务器上，自动聚合设备测试数据、维修记录与历史案例库，通过大模型推理生成故障原因分析及标准修复建议。
                 </div>
               </div>
             </div>

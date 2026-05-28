@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bot, Search, LayoutDashboard, Library, Settings } from 'lucide-react';
+import { Bot, Search, LayoutDashboard, Library, Settings, Cpu } from 'lucide-react';
 import type { NavigationTab } from '../../types';
 
 interface SidebarProps {
@@ -51,6 +51,15 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
           active={activeTab === 'settings'}
           onClick={() => onTabChange('settings')}
         />
+        <div
+          className="flex items-center gap-2 mt-3 px-3 py-2 rounded-lg"
+          style={{ backgroundColor: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.15)' }}
+        >
+          <Cpu className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+          <span className="text-[11px] font-medium" style={{ color: 'var(--color-text-sidebar-muted)' }}>
+            海光DCU 算力平台
+          </span>
+        </div>
       </div>
     </div>
   );

@@ -12,8 +12,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..core.auth import get_current_user, require_role
 from ..core.mongodb import get_collection
+from ..models.request import AutoSyncConfigUpdateRequest
 from ..models.response import ApiResponse
 from ..services.sync_service import get_sync_service
+from ..services.sync_scheduler_service import get_sync_scheduler_service
 
 logger = logging.getLogger(__name__)
 
@@ -136,3 +138,35 @@ async def get_jobs(
     svc = get_sync_service()
     result = await svc.get_jobs(factory_id=factory_id, page=page, limit=limit)
     return ApiResponse(success=True, data=result)
+
+
+# ── 自动同步配置 ──
+
+
+@router.get("/auto-config", response_model=ApiResponse)
+async def get_auto_sync_config(current_user: dict = Depends(get_current_user)):
+    """获取自动同步配置（SIMS + MES）"""
+    svc = get_sync_scheduler_service()
+    config = await svc.get_configs()
+    return ApiResponse(success=True, data=config)
+
+
+@router.put("/auto-config", response_model=ApiResponse)
+async def update_auto_sync_config(
+    request: AutoSyncConfigUpdateRequest,
+    current_user: dict = Depends(require_role(["admin"])),
+):
+    """更新自动同步配置（仅 admin）"""
+    svc = get_sync_scheduler_service()
+    result = await svc.update_config(request)
+    return ApiResponse(success=True, data=result, message="自动同步配置已更新")
+
+
+@router.post("/trigger-mes", response_model=ApiResponse)
+async def trigger_mes_sync(
+    current_user: dict = Depends(require_role(["admin", "engineer"])),
+):
+    """手动触发 MES 维修数据同步"""
+    svc = get_sync_scheduler_service()
+    result = await svc.trigger_mes_now()
+    return ApiResponse(success=True, data=result, message="MES 同步任务已启动")

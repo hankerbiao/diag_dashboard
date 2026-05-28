@@ -1,5 +1,5 @@
 import type { KeyboardEvent } from 'react';
-import { Bot, Loader2 } from 'lucide-react';
+import { Bot, Loader2, Cpu } from 'lucide-react';
 
 interface DiagnosisInputProps {
   sn: string;
@@ -58,6 +58,17 @@ export default function DiagnosisInput({ sn, onSnChange, onDiagnose, loading, on
         {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
         {loading ? '诊断中...' : '大模型推理'}
       </button>
+      <span
+        className="text-[10px] font-bold px-2 py-1 rounded-md border flex items-center gap-1 shrink-0"
+        style={{
+          color: 'var(--color-accent)',
+          borderColor: 'var(--color-accent)',
+          backgroundColor: 'var(--color-accent-light)',
+        }}
+      >
+        <Cpu className="w-3 h-3" />
+        海光DCU加速
+      </span>
     </div>
   );
 }
