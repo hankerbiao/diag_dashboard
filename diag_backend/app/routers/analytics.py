@@ -26,7 +26,7 @@ async def get_dashboard_insights(
 ):
     """获取看板聚合数据（6 组聚合结果）"""
     svc = get_analytics_service()
-    data = await svc.get_dashboard_insights(
+    data = await svc.get_insights(
         factory_id=factory_id,
         search_sn=search_sn,
         search_product_models=search_product_models,
