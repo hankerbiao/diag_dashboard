@@ -43,15 +43,15 @@ async def execute_sync_script(cmd: List[str], job_id: str) -> str:
     )
 
     output_lines: List[str] = []
-    last_flush = asyncio.get_event_loop().time()
+    loop = asyncio.get_running_loop()
+    last_flush = loop.time()
 
     async def _read_stream(stream: asyncio.StreamReader, label: str):
         nonlocal last_flush
         async for line in stream:
             text = line.decode(errors="replace")
             output_lines.append(f"[{label}] {text}")
-            # 每 2 秒刷新一次进度到 MongoDB
-            now = asyncio.get_event_loop().time()
+            now = loop.time()
             if now - last_flush >= 2:
                 await col.update_one(
                     {"_id": ObjectId(job_id)},
@@ -111,57 +111,52 @@ class SyncSchedulerService:
 
     async def _run_sims_sync(self, factory_id: str, cutoff_hours: int) -> dict:
         key = f"sims:{factory_id}"
-        existing = self._running_jobs.get(key)
-        if existing and not existing.done():
+        if self._running_jobs.get(key) and not self._running_jobs[key].done():
             return {"status": "skipped", "reason": f"厂区 {factory_id} 同步任务已在执行中"}
 
+        col = get_collection("sync_jobs")
+        result = await col.insert_one({
+            "factory_id": factory_id, "sync_type": "sims", "status": "running",
+            "triggered_by": "scheduler",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        })
+        job_id = str(result.inserted_id)
+        cmd = ["python", f"{_SCRIPTS_DIR}/sync_data.py", "--factory", factory_id,
+               "--hours", str(cutoff_hours or 24)]
+
         async def _execute():
-            cmd = [
-                "python", f"{_SCRIPTS_DIR}/sync_data.py",
-                "--factory", factory_id,
-                "--hours", str(cutoff_hours or 24),
-            ]
-            col = get_collection("sync_jobs")
-            result = await col.insert_one({
-                "factory_id": factory_id, "sync_type": "sims",
-                "status": "running", "triggered_by": "scheduler",
-                "started_at": datetime.now(timezone.utc).isoformat(),
-            })
-            job_id = str(result.inserted_id)
-            status = await execute_sync_script(cmd, job_id)
-            if status == "completed":
+            if await execute_sync_script(cmd, job_id) == "completed":
                 await get_collection("auto_sync_configs").update_one(
                     {"factory_id": factory_id},
                     {"$set": {"last_run_at": datetime.now(timezone.utc)}},
                 )
 
         self._running_jobs[key] = asyncio.create_task(_execute())
-        return {"job_id": "pending", "status": "started"}
+        return {"job_id": job_id, "status": "started"}
 
     async def _run_mes_sync(self) -> dict:
         key = "mes:global"
-        existing = self._running_jobs.get(key)
-        if existing and not existing.done():
+        if self._running_jobs.get(key) and not self._running_jobs[key].done():
             return {"status": "skipped", "reason": "MES 同步任务已在执行中"}
 
+        col = get_collection("sync_jobs")
+        result = await col.insert_one({
+            "factory_id": MES_CONFIG_KEY, "sync_type": "mes", "status": "running",
+            "triggered_by": "scheduler",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        })
+        job_id = str(result.inserted_id)
+        cmd = ["python", f"{_SCRIPTS_DIR}/sync_mes.py", "--sync-recent", "1"]
+
         async def _execute():
-            cmd = ["python", f"{_SCRIPTS_DIR}/sync_mes.py", "--sync-recent", "1"]
-            col = get_collection("sync_jobs")
-            result = await col.insert_one({
-                "factory_id": MES_CONFIG_KEY, "sync_type": "mes",
-                "status": "running", "triggered_by": "scheduler",
-                "started_at": datetime.now(timezone.utc).isoformat(),
-            })
-            job_id = str(result.inserted_id)
-            status = await execute_sync_script(cmd, job_id)
-            if status == "completed":
+            if await execute_sync_script(cmd, job_id) == "completed":
                 await get_collection("auto_sync_configs").update_one(
                     {"factory_id": MES_CONFIG_KEY},
                     {"$set": {"last_run_at": datetime.now(timezone.utc)}},
                 )
 
         self._running_jobs[key] = asyncio.create_task(_execute())
-        return {"job_id": "pending", "status": "started"}
+        return {"job_id": job_id, "status": "started"}
 
     # ── Scheduler Loops ──
 

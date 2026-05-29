@@ -10,12 +10,14 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..core.auth import get_current_user, require_role
+from ..core.auth import get_current_user
 from ..core.mongodb import get_collection
 from ..models.request import AutoSyncConfigUpdateRequest
 from ..models.response import ApiResponse
 from ..services.sync_service import get_sync_service
 from ..services.sync_scheduler_service import get_sync_scheduler_service, execute_sync_script
+from bson import ObjectId
+from bson.errors import InvalidId
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +57,21 @@ async def trigger_sync(
             job_id = str(result.inserted_id)
 
             # 异步执行同步（不阻塞响应，进度实时写入 MongoDB）
-            asyncio.create_task(execute_sync_script(cmd, job_id))
+            async def _run_and_track():
+                status = await execute_sync_script(cmd, job_id)
+                if status == "completed":
+                    now = datetime.now(timezone.utc)
+                    if factory:
+                        await get_collection("auto_sync_configs").update_one(
+                            {"factory_id": factory},
+                            {"$set": {"last_run_at": now}},
+                        )
+                    else:
+                        await get_collection("auto_sync_configs").update_many(
+                            {"factory_id": {"$ne": "__mes__"}},
+                            {"$set": {"last_run_at": now}},
+                        )
+            asyncio.create_task(_run_and_track())
 
             return ApiResponse(
                 success=True,
@@ -108,6 +124,20 @@ async def get_test_details(
     return ApiResponse(success=True, data=result)
 
 
+@router.get("/jobs/{job_id}", response_model=ApiResponse)
+async def get_job_detail(job_id: str, current_user: dict = Depends(get_current_user)):
+    """查询单个同步任务详情（含实时进度）"""
+    col = get_collection("sync_jobs")
+    try:
+        doc = await col.find_one({"_id": ObjectId(job_id)})
+    except InvalidId:
+        return ApiResponse(success=False, error="无效的任务 ID")
+    if not doc:
+        return ApiResponse(success=False, error="任务不存在")
+    doc["id"] = str(doc.pop("_id"))
+    return ApiResponse(success=True, data=doc)
+
+
 @router.get("/jobs")
 async def get_jobs(
     factory_id: Optional[str] = Query(None, description="厂区标识，不传则查全部"),
@@ -135,9 +165,9 @@ async def get_auto_sync_config(current_user: dict = Depends(get_current_user)):
 @router.put("/auto-config", response_model=ApiResponse)
 async def update_auto_sync_config(
     request: AutoSyncConfigUpdateRequest,
-    current_user: dict = Depends(require_role(["admin"])),
+    current_user: dict = Depends(get_current_user),
 ):
-    """更新自动同步配置（仅 admin）"""
+    """更新自动同步配置"""
     svc = get_sync_scheduler_service()
     result = await svc.update_config(request)
     return ApiResponse(success=True, data=result, message="自动同步配置已更新")

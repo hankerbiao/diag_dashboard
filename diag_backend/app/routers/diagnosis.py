@@ -417,8 +417,11 @@ async def _sse_wrap(runner: Callable[[Callable[[str, str], Awaitable[None]],
             await queue.put(("token", {"text": text}))
 
         try:
-            result = await runner(_progress, _token)
+            result = await asyncio.wait_for(runner(_progress, _token), timeout=600.0)
             await queue.put(("done", {"success": True, "data": result}))
+        except asyncio.TimeoutError:
+            logger.error("诊断超时（10分钟）")
+            await queue.put(("error", {"message": "诊断超时，大模型响应时间过长，请稍后重试"}))
         except Exception as e:
             msg = str(e) if isinstance(e, ValueError) else f"{on_error_prefix}: {e}"
             logger.warning(msg) if isinstance(e, ValueError) else logger.exception(msg)

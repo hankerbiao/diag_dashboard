@@ -2,6 +2,7 @@ from typing import Awaitable, Callable, Optional
 import json
 import re
 
+import httpx
 from openai import AsyncOpenAI
 
 DEVICE_INFO_TPL = """## 设备信息
@@ -90,6 +91,7 @@ class LLMService:
             kwargs = {"api_key": key}
             if url:
                 kwargs["base_url"] = url
+            kwargs["timeout"] = httpx.Timeout(300.0, connect=10.0, read=120.0)
             self.openai_client = AsyncOpenAI(**kwargs)
         else:
             self.openai_client = None
