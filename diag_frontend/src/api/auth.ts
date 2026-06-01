@@ -17,7 +17,6 @@ export interface AuthResponse {
 export interface User {
   id: string;
   email: string;
-  role?: string;
 }
 
 // ============ Token 管理 ============
@@ -88,7 +87,6 @@ export async function signIn(
       user: {
         id: data.user_id,
         email: data.email,
-        role: data.role || 'engineer',
       },
     };
   } catch (error) {
@@ -115,7 +113,6 @@ export async function signUp(email: string, password: string): Promise<{ user?: 
       user: {
         id: data.user_id,
         email: data.email,
-        role: data.role || 'engineer',
       },
     };
   } catch (error) {
@@ -144,7 +141,7 @@ export async function getCurrentUser(): Promise<User | null> {
     }
 
     const data = await response.json();
-    return { id: data.id, email: data.email, role: data.role || 'viewer' };
+    return { id: data.id, email: data.email };
   } catch {
     clearAccessToken();
     clearRememberedCredentials();

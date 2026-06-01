@@ -1,5 +1,7 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from typing import Optional
+import os
 
 
 class Settings(BaseSettings):
@@ -34,6 +36,22 @@ class Settings(BaseSettings):
     ragflow_api_url: str = ""
     ragflow_api_key: str = ""
     ragflow_default_dataset: str = "weaveeye-knowledge-base"
+
+    # Logging
+    log_level: str = "INFO"  # DEBUG/INFO/WARNING/ERROR
+    log_format: str = "console"  # console/json
+    log_file: Optional[str] = None  # 日志文件路径，None 则仅输出控制台
+    log_max_bytes: int = 50 * 1024 * 1024  # 50MB 轮转
+    log_backup_count: int = 30  # 保留 30 个备份
+    log_json: bool = False  # 是否输出 JSON 格式
+    log_sql: bool = False  # 是否记录 SQL 查询（DEBUG 级别）
+
+    @property
+    def log_dir(self) -> Optional[str]:
+        """获取日志目录路径"""
+        if self.log_file:
+            return os.path.dirname(os.path.abspath(self.log_file))
+        return None
 
     class Config:
         env_file = ".env"

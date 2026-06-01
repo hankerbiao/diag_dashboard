@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..models.request import GlobalAiConfigUpdateRequest
 from ..models.response import ApiResponse
-from ..core.auth import get_current_user, require_role
+from ..core.auth import get_current_user
 from ..core.mongodb import get_collection
 
 router = APIRouter(prefix="/settings", tags=["设置"])
@@ -63,7 +63,7 @@ async def get_global_ai_config(current_user: dict = Depends(get_current_user)):
 @router.put("/ai-config", response_model=ApiResponse)
 async def update_global_ai_config(
     request: GlobalAiConfigUpdateRequest,
-    current_user: dict = Depends(require_role(["admin"]))
+    current_user: dict = Depends(get_current_user)
 ):
     """更新全局 AI 配置并热加载到 LLM 服务（仅 admin）"""
     try:

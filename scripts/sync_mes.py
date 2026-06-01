@@ -33,14 +33,32 @@
     - MongoDB: diag_ai.maintenance_records
     - 本地文件: ./data/maintenance_records/YYYY-MM/
     - RAGFlow: 知识库文档
+
+日志环境变量:
+    SYNC_LOG_LEVEL=DEBUG         # 日志级别
+    SYNC_LOG_DIR=./logs          # 日志目录
+    SYNC_LOG_JSON=false          # JSON 格式输出
 """
 import os, asyncio, calendar
 from datetime import datetime, timedelta
 from typing import Optional
+import time as time_module
 
 import requests, httpx
 from pymongo import MongoClient
 from tqdm import tqdm
+
+# 导入统一日志模块
+from sync_logger import (
+    setup_logger, log_sync_start, log_sync_complete, log_sync_error,
+    log_api_call, log_step, log_data_stats, log_warning, log_debug, TRACE_ID
+)
+
+# 初始化日志
+logger = setup_logger("sync_mes")
+
+# 脚本标识
+SCRIPT_NAME = "sync_mes"
 
 # ══════════════════════════════════════════════════════════════════
 # 配置
@@ -105,35 +123,54 @@ MES_BASES = ["9000", "D000"]  # 多区域配置
 def _fetch(start: str, end: str) -> list:
     """获取 MES 数据（支持多区域）"""
     all_data = []
+    total_count = 0
+    failed_bases = []
 
     for base in MES_BASES:
         url = f"{MES_API}?Base={base}&keyType=k1&keyValue=null&firstappear=null&secondappear=null&FromLot=null&issueTime1={start}&issueTime2={end}"
-        print(f"  📡 POST [Base={base}] {url}")
+        start_time = time_module.time()
+        logger.info(f"📡 请求 MES API [Base={base}]", extra={"base": base, "url": url[:100]})
         try:
             resp = requests.post(url, headers=MES_HEADERS, timeout=60)
+            duration_ms = (time_module.time() - start_time) * 1000
             resp.raise_for_status()
             data = resp.json().get('data', [])
-            print(f"     ← {resp.status_code} | Base={base}: {len(data)} 条")
+            count = len(data)
+            total_count += count
             all_data.extend(data)
+            log_api_call(url, "POST", resp.status_code, count, duration_ms)
+            logger.debug(f"   ← {resp.status_code} | Base={base}: {count} 条", extra={"base": base, "count": count})
         except Exception as e:
-            print(f"     ✗ Base={base} 请求失败: {e}")
+            duration_ms = (time_module.time() - start_time) * 1000
+            failed_bases.append(base)
+            log_api_call(url, "POST", status_code=500, duration_ms=duration_ms, error=str(e))
+            logger.error(f"   ✗ Base={base} 请求失败: {e}", extra={"base": base, "error": str(e)})
 
-    print(f"  ✓ 共获取 {len(all_data)} 条记录")
+    if failed_bases:
+        log_warning("MES API 部分区域请求失败", bases=failed_bases)
+
+    log_step("MES 数据拉取完成", f"共 {total_count} 条", total_count)
     return all_data
 
 def _check_ragflow_docs() -> set:
     """获取 RAGFlow 已有的文档名"""
     try:
         url = f"{RAGFLOW_URL}/api/v1/datasets/{DATASET_ID}/documents?page=1&page_size=1000"
+        start_time = time_module.time()
         resp = requests.get(url, headers={"Authorization": f"Bearer {RAGFLOW_KEY}"}, timeout=30)
+        duration_ms = (time_module.time() - start_time) * 1000
         body = resp.json()
         if body.get("code") == 0:
             docs = body.get("data", {})
             if isinstance(docs, dict):
                 docs = docs.get("docs", docs.get("items", []))
+            count = len(docs)
+            log_api_call(url, "GET", resp.status_code, count, duration_ms)
             return {d.get("name", "") for d in docs}
-    except:
-        pass
+        else:
+            log_api_call(url, "GET", resp.status_code, error=body.get("message", "unknown"))
+    except Exception as e:
+        log_warning(f"检查 RAGFlow 文档失败: {e}")
     return set()
 
 
@@ -181,8 +218,10 @@ def _format_batch(data_list: list, batch_num: int, y: int, m: int) -> str:
 def _save_local(content: str, y: int, m: int, name: str) -> str:
     path = os.path.join(DATA_DIR, f"{y}-{m:02d}")
     os.makedirs(path, exist_ok=True)
-    with open(os.path.join(path, name), 'w', encoding='utf-8') as f:
+    full_path = os.path.join(path, name)
+    with open(full_path, 'w', encoding='utf-8') as f:
         f.write(content)
+    log_debug(f"本地文件保存: {full_path}", path=full_path, size=len(content))
     return path
 
 def _save_mongo(data_list: list, y: int, m: int) -> int:
@@ -191,6 +230,7 @@ def _save_mongo(data_list: list, y: int, m: int) -> int:
     col = _maint_col()
     ts = datetime.now()
     count = 0
+    failed = 0
     for d in data_list:
         doc = {**d, "sync_year": y, "sync_month": f"{y}-{m:02d}", "synced_at": ts}
         try:
@@ -201,11 +241,15 @@ def _save_mongo(data_list: list, y: int, m: int) -> int:
                 {"$set": doc}, upsert=True
             ).upserted_id:
                 count += 1
-        except:
-            pass
+        except Exception as e:
+            failed += 1
+            log_debug(f"MongoDB 写入失败: {d.get('s_CHASSISNO', 'unknown')}", error=str(e))
+
+    log_step("MongoDB 写入完成", f"新增: {count}, 失败: {failed}", count)
     return count
 
 async def _upload_ragflow(path: str, name: str) -> Optional[str]:
+    start_time = time_module.time()
     try:
         with open(path, 'rb') as f:
             async with httpx.AsyncClient(timeout=120) as client:
@@ -214,11 +258,20 @@ async def _upload_ragflow(path: str, name: str) -> Optional[str]:
                     headers={"Authorization": f"Bearer {RAGFLOW_KEY}"},
                     files={"file": (name, f, "application/octet-stream")}
                 )
+        duration_ms = (time_module.time() - start_time) * 1000
         body = resp.json()
         if body.get("code") == 0:
-            return body.get("data", [{}])[0].get("id", "")
+            doc_id = body.get("data", [{}])[0].get("id", "")
+            log_api_call(f"{RAGFLOW_URL}/documents", "POST", resp.status_code, duration_ms=duration_ms)
+            log_debug(f"RAGFlow 上传成功: {name}", doc_id=doc_id, file=name)
+            return doc_id
+        else:
+            log_api_call(f"{RAGFLOW_URL}/documents", "POST", resp.status_code, error=body.get("message"))
+            logger.warning(f"   ⚠ {name} 上传失败: {body.get('message')}")
     except Exception as e:
-        print(f"    ✗ {name} 上传失败: {e}")
+        duration_ms = (time_module.time() - start_time) * 1000
+        log_api_call(f"{RAGFLOW_URL}/documents", "POST", status_code=500, duration_ms=duration_ms, error=str(e))
+        logger.error(f"   ✗ {name} 上传失败: {e}")
     return None
 
 async def _trigger_parse(doc_ids: list):
@@ -231,10 +284,13 @@ async def _trigger_parse(doc_ids: list):
                 headers={"Authorization": f"Bearer {RAGFLOW_KEY}", "Content-Type": "application/json"},
                 json={"document_ids": doc_ids}
             )
-        if resp.json().get("code") != 0:
-            print(f"    ⚠ 解析触发失败")
-    except:
-        pass
+        body = resp.json()
+        if body.get("code") == 0:
+            log_debug(f"RAGFlow 解析触发成功: {len(doc_ids)} 个文档", doc_ids=doc_ids)
+        else:
+            log_warning(f"RAGFlow 解析触发失败: {body.get('message')}")
+    except Exception as e:
+        log_warning(f"RAGFlow 解析触发失败: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -243,11 +299,14 @@ async def _trigger_parse(doc_ids: list):
 async def _sync_data(data_list: list, y: int, m: int, label: str):
     """通用数据同步：本地 + MongoDB + RAGFlow"""
     if not data_list:
+        log_step("无数据需要同步", "", 0)
         return {"count": 0, "docs": 0}
+
+    count = len(data_list)
+    log_sync_start(f"{SCRIPT_NAME}.data", y=y, m=m, label=label, count=count)
 
     # 本地文件
     dir_path = _save_local(_format_batch(data_list, 1, y, m), y, m, f"maintenance_{y}{m:02d}.txt")
-    count = len(data_list)
     print(f"    ✓ 本地文件: {dir_path}/")
 
     # MongoDB
@@ -260,19 +319,24 @@ async def _sync_data(data_list: list, y: int, m: int, label: str):
     doc_ids = []
     if files:
         print(f"    上传 RAGFlow ({len(files)} 个文件)...")
+        log_step("开始上传 RAGFlow", f"{len(files)} 个文件", len(files))
         for fn in tqdm(files, desc="      上传", unit="file", ncols=70):
             doc_id = await _upload_ragflow(os.path.join(dir_path, fn), fn)
             if doc_id:
                 doc_ids.append(doc_id)
-        await _trigger_parse(doc_ids)
+        if doc_ids:
+            await _trigger_parse(doc_ids)
+            log_step("RAGFlow 上传完成", f"成功: {len(doc_ids)} 个", len(doc_ids))
     else:
-        print(f"    ✓ RAGFlow 无需上传")
+        print("    ✓ RAGFlow 无需上传 (已是最新)")
+        log_debug("RAGFlow 无需上传")
 
     return {"count": count, "docs": len(doc_ids), "mongo": mongo_count}
 
 
 async def _sync_period(start_date: str, end_date: str, y: int, m: int, label: str):
     """同步指定时间范围的数据"""
+    start_time = time_module.time()
     print(f"\n{'─'*50}\n📥 {label}\n{'─'*50}")
     print(f"  调用 MES API: {start_date[:8]} ~ {end_date[:8]}")
 
@@ -280,10 +344,13 @@ async def _sync_period(start_date: str, end_date: str, y: int, m: int, label: st
     print(f"  ✓ 获取到 {len(data)} 条记录")
 
     if not data:
+        log_step("无数据", label, 0)
         return {"status": "completed", "count": 0}
 
     result = await _sync_data(data, y, m, label)
-    print(f"  ✓ {label} 完成: {result['count']} 条")
+    duration_ms = (time_module.time() - start_time) * 1000
+    print(f"  ✓ {label} 完成: {result['count']} 条 (耗时: {duration_ms/1000:.1f}s)")
+    log_sync_complete(f"{SCRIPT_NAME}.{label}", duration_ms, count=result['count'])
 
     # 记录同步日期
     _sync_col().update_one(
@@ -299,6 +366,7 @@ async def _sync_period(start_date: str, end_date: str, y: int, m: int, label: st
 # ══════════════════════════════════════════════════════════════════
 async def sync_month(y: int, m: int):
     """全量同步单月"""
+    logger.info(f"开始同步 {y}-{m:02d} 月", extra={"year": y, "month": m, "type": "monthly"})
     s, e = _month_range(y, m)
     await _sync_period(s, e, y, m, f"{y}-{m:02d} 月")
 
@@ -311,6 +379,7 @@ async def sync_day(d: datetime):
     synced = {date for r in _sync_col().find({}, {"synced_dates": 1}) for date in r.get("synced_dates", [])}
     if label in synced:
         print(f"  ⏭️ {label} 已同步，跳过")
+        log_step("日期已同步", label, skipped=1)
         return {"status": "skipped"}
 
     result = await _sync_period(s, e, d.year, d.month, label)
@@ -319,7 +388,10 @@ async def sync_day(d: datetime):
 
 async def sync_recent(days: int = 7):
     """增量同步最近 N 天（一次性请求 + 按日分组）"""
+    start_time = time_module.time()
     print(f"\n{'='*50}\n🚀 增量同步最近 {days} 天\n{'='*50}")
+    logger.info(f"🚀 增量同步最近 {days} 天", extra={"days": days, "type": "recent"})
+    log_sync_start(f"{SCRIPT_NAME}.recent", days=days)
 
     today = datetime.now()
     start = (today - timedelta(days=days)).replace(hour=0, minute=0, second=0)
@@ -332,6 +404,7 @@ async def sync_recent(days: int = 7):
 
     if not all_data:
         print("  无数据")
+        logger.info("无数据需要同步", extra={"days": days, "type": "recent"})
         return
 
     # 按日期分组
@@ -348,9 +421,10 @@ async def sync_recent(days: int = 7):
     total_count = sum(len(v) for v in by_date.values())
     new_count = sum(len(v) for k, v in by_date.items() if k not in synced)
     print(f"  按日期分布: {len(by_date)} 天有数据, 新数据 {new_count} 条")
+    log_data_stats(total=total_count, skipped=total_count - new_count)
 
     # 同步新日期的数据
-    count, new_days = 0, 0
+    count, new_days, failed_days = 0, 0, 0
     for date_str in tqdm(sorted(by_date.keys()), desc="  处理日期", unit="天", ncols=70):
         if date_str in synced:
             continue
@@ -358,31 +432,40 @@ async def sync_recent(days: int = 7):
         data = by_date[date_str]
         y, m, d = map(int, date_str.split('-'))
 
-        # 存储
-        _save_mongo(data, y, m)
-        dir_path = _save_local(_format_batch(data, 1, y, m), y, m, f"maintenance_{date_str.replace('-', '')}.txt")
+        try:
+            # 存储
+            _save_mongo(data, y, m)
+            dir_path = _save_local(_format_batch(data, 1, y, m), y, m, f"maintenance_{date_str.replace('-', '')}.txt")
 
-        # 上传 RAGFlow
-        existing = _check_ragflow_docs()
-        files = [f for f in os.listdir(dir_path) if f.endswith('.txt') and f not in existing]
-        for fn in files:
-            doc_id = await _upload_ragflow(os.path.join(dir_path, fn), fn)
+            # 上传 RAGFlow
+            existing = _check_ragflow_docs()
+            files = [f for f in os.listdir(dir_path) if f.endswith('.txt') and f not in existing]
+            for fn in files:
+                doc_id = await _upload_ragflow(os.path.join(dir_path, fn), fn)
 
-        # 记录同步日期
-        _sync_col().update_one(
-            {"sync_type": "mes_maintenance", "month_key": f"{y}-{m:02d}"},
-            {"$addToSet": {"synced_dates": date_str}}, upsert=True
-        )
+            # 记录同步日期
+            _sync_col().update_one(
+                {"sync_type": "mes_maintenance", "month_key": f"{y}-{m:02d}"},
+                {"$addToSet": {"synced_dates": date_str}}, upsert=True
+            )
 
-        count += len(data)
-        new_days += 1
+            count += len(data)
+            new_days += 1
+        except Exception as e:
+            failed_days += 1
+            logger.error(f"日期 {date_str} 同步失败: {e}")
 
-    print(f"\n📊 完成: {new_days} 天, {count} 条新记录")
+    duration_ms = (time_module.time() - start_time) * 1000
+    print(f"\n📊 完成: {new_days} 天, {count} 条新记录" + (f", 失败: {failed_days} 天" if failed_days else ""))
+    log_sync_complete(f"{SCRIPT_NAME}.recent", duration_ms, days=new_days, records=count, failed=failed_days)
 
 async def sync_full(year: int = None):
     """全年全量同步"""
     year = year or datetime.now().year
+    start_time = time_module.time()
     print(f"\n{'='*50}\n🚀 {year} 年全量同步\n{'='*50}")
+    logger.info(f"🚀 {year} 年全量同步", extra={"year": year, "type": "full"})
+    log_sync_start(f"{SCRIPT_NAME}.full", year=year)
 
     # 获取所有已同步的月份（一次查询）
     synced_months = {r["month_key"] for r in _sync_col().find({}, {"month_key": 1})}
@@ -397,8 +480,15 @@ async def sync_full(year: int = None):
 
     pending_months = sorted(pending_months)
     print(f"待同步月份: {len(pending_months)} 个")
+    log_step("待同步月份", f"{len(pending_months)} 个", len(pending_months))
+
+    total_months = 0
     for y, m in pending_months:
         await sync_month(y, m)
+        total_months += 1
+
+    duration_ms = (time_module.time() - start_time) * 1000
+    log_sync_complete(f"{SCRIPT_NAME}.full", duration_ms, year=year, months=total_months)
 
 def show_status():
     """显示同步状态"""
@@ -417,8 +507,10 @@ def query(chassis: str = None, defect: str = None, limit: int = 10):
     print(f"\n{'='*50}\n🔍 维修数据查询\n{'='*50}")
     col = _maint_col()
     q = {}
-    if chassis: q["s_CHASSISNO"] = chassis
-    if defect: q["s_3RDDEFECTAPPEARNAME"] = {"$regex": defect}
+    if chassis:
+        q["s_CHASSISNO"] = chassis
+    if defect:
+        q["s_3RDDEFECTAPPEARNAME"] = {"$regex": defect}
 
     for i, doc in enumerate(col.find(q).sort("nG_TXNDATE", -1).limit(limit), 1):
         print(f"\n  [{i}] {doc.get('s_WMSLOCATIONNAME')} - {doc.get('s_CHASSISNO')}")
@@ -454,10 +546,17 @@ if __name__ == "__main__":
     p.add_argument("--sync-recent", type=int, metavar="N")
     args = p.parse_args()
 
-    if args.query: query(args.chassis, args.defect, args.limit)
-    elif args.status: show_status()
-    elif args.reset: reset(args.reset)
-    elif args.sync_day: asyncio.run(sync_day(datetime.strptime(args.sync_day, "%Y-%m-%d")))
-    elif args.sync_recent: asyncio.run(sync_recent(args.sync_recent))
-    elif args.month: asyncio.run(sync_month(args.year, args.month))
-    else: asyncio.run(sync_full(args.year))
+    if args.query:
+        query(args.chassis, args.defect, args.limit)
+    elif args.status:
+        show_status()
+    elif args.reset:
+        reset(args.reset)
+    elif args.sync_day:
+        asyncio.run(sync_day(datetime.strptime(args.sync_day, "%Y-%m-%d")))
+    elif args.sync_recent:
+        asyncio.run(sync_recent(args.sync_recent))
+    elif args.month:
+        asyncio.run(sync_month(args.year, args.month))
+    else:
+        asyncio.run(sync_full(args.year))

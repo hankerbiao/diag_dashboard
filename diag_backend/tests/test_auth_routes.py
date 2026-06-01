@@ -138,7 +138,6 @@ class TestAuthMe:
         mock_collection.find_one = AsyncMock(return_value={
             "_id": ObjectId(),
             "email": "test@example.com",
-            "role": "engineer",
         })
 
         with patch("app.routers.auth.get_collection", return_value=mock_collection):
@@ -151,7 +150,6 @@ class TestAuthMe:
         data = response.json()
         assert data["id"] == "test-user-id-123"
         assert data["email"] == "test@example.com"
-        assert data["role"] == "engineer"
 
     @pytest.mark.asyncio
     async def test_get_me_no_token(self, async_client):

@@ -63,6 +63,9 @@ export default function SyncManagement() {
   const [syncingMes, setSyncingMes] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [recentJobs, setRecentJobs] = useState<SyncJobItem[]>([]);
+  const [jobsTotal, setJobsTotal] = useState(0);
+  const [jobsPage, setJobsPage] = useState(1);
+  const [jobsLimit] = useState(10);
   const [progressJob, setProgressJob] = useState<{ jobId: string; factoryLabel: string } | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -74,13 +77,39 @@ export default function SyncManagement() {
   const fetchData = useCallback(async (showLoading = false) => {
     if (showLoading) { setLoading(true); setError(null); }
     try {
-      const [cfg, jobs] = await Promise.all([syncApi.getAutoConfig(), syncApi.getJobs({ limit: 5 })]);
+      // 获取配置和所有运行中的任务（用于显示厂区状态）
+      const [cfg, allJobs] = await Promise.all([
+        syncApi.getAutoConfig(),
+        syncApi.getJobs({ page: 1, limit: 100 })  // 获取足够多的任务来检查运行状态
+      ]);
+      // 当前页的任务用于显示
+      const pageJobs = await syncApi.getJobs({ page: jobsPage, limit: jobsLimit });
+
       if (cfg.success && cfg.data) setConfig(cfg.data);
       else if (showLoading) setError(cfg.error || '加载配置失败');
-      if (jobs.success && jobs.data) setRecentJobs(jobs.data.items);
+      if (allJobs.success && allJobs.data) {
+        // 检查运行中的 SIMS 任务
+        const runningJobs: Record<string, SyncJobItem> = {};
+        for (const job of allJobs.data.items) {
+          if (job.status === 'running' && job.sync_type === 'sims') {
+            if (!runningJobs[job.factory_id] || job.started_at > runningJobs[job.factory_id].started_at) {
+              runningJobs[job.factory_id] = job;
+            }
+          }
+        }
+        setSyncingSims(prev => {
+          const newState: Record<string, boolean> = {};
+          for (const fid of Object.keys(runningJobs)) newState[fid] = true;
+          return Object.keys(newState).length > 0 ? newState : {};
+        });
+      }
+      if (pageJobs.success && pageJobs.data) {
+        setRecentJobs(pageJobs.data.items);
+        setJobsTotal(pageJobs.data.total || 0);
+      }
     } catch { if (showLoading) setError('网络错误，无法加载同步配置'); }
     finally { if (showLoading) setLoading(false); }
-  }, []);
+  }, [jobsPage, jobsLimit]);
 
   const startPolling = useCallback(() => {
     if (pollRef.current) return;
@@ -173,6 +202,7 @@ export default function SyncManagement() {
         <table className="w-full text-[13px]">
           <thead><tr style={{ color: 'var(--color-text-muted)', borderBottom: '1px solid var(--color-border)' }}>
             <th className="text-left font-medium px-5 py-3">厂区</th><th className="text-center font-medium px-5 py-3 w-20">启用</th>
+            <th className="text-center font-medium px-5 py-3 w-24">状态</th>
             <th className="text-left font-medium px-5 py-3">上次同步</th><th className="text-right font-medium px-5 py-3 w-28">操作</th>
           </tr></thead>
           <tbody>
@@ -184,6 +214,19 @@ export default function SyncManagement() {
                     className="h-6 w-10 rounded-full relative transition-colors" style={{ backgroundColor: fac.enabled ? '#10b981' : 'var(--color-border)' }}>
                     <div className="w-4 h-4 bg-white rounded-full absolute top-1 shadow transition-transform" style={{ left: fac.enabled ? 'calc(100% - 18px)' : '2px' }} />
                   </button>
+                </td>
+                <td className="px-5 py-3 text-center">
+                  {syncingSims[fac.factory_id] ? (
+                    <span className="inline-flex items-center gap-1 text-[12px] font-medium px-2 py-0.5 rounded-full"
+                      style={{ backgroundColor: 'rgba(245,158,11,0.1)', color: '#d97706' }}>
+                      <Loader2 className="w-3 h-3 animate-spin" />运行中
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[12px] font-medium px-2 py-0.5 rounded-full"
+                      style={{ backgroundColor: 'rgba(16,185,129,0.1)', color: '#059669' }}>
+                      空闲
+                    </span>
+                  )}
                 </td>
                 <td className="px-5 py-3 font-mono text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>{formatTime(fac.last_run_at)}</td>
                 <td className="px-5 py-3 text-right">
@@ -216,8 +259,19 @@ export default function SyncManagement() {
       {/* Recent Jobs */}
       {recentJobs.length > 0 && (
         <div className="rounded-xl border shadow-sm overflow-hidden" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}>
-          <div className="px-5 py-3 border-b text-[12px] font-bold uppercase tracking-widest"
-            style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-secondary)', color: 'var(--color-text-secondary)' }}>最近同步任务</div>
+          <div className="px-5 py-3 border-b flex items-center justify-between"
+            style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-secondary)', color: 'var(--color-text-secondary)' }}>
+            <span className="text-[12px] font-bold uppercase tracking-widest">最近同步任务</span>
+            {jobsTotal > jobsLimit && (
+              <div className="flex items-center gap-2">
+                <span className="text-[11px]">{Math.min((jobsPage - 1) * jobsLimit + 1, jobsTotal)}-{Math.min(jobsPage * jobsLimit, jobsTotal)} / {jobsTotal}</span>
+                <button onClick={() => setJobsPage(p => Math.max(1, p - 1))} disabled={jobsPage <= 1}
+                  className="h-6 w-6 rounded border text-[11px] disabled:opacity-30" style={{ borderColor: 'var(--color-border)' }}>‹</button>
+                <button onClick={() => setJobsPage(p => Math.ceil(jobsTotal / jobsLimit) > p ? p + 1 : p)} disabled={jobsPage >= Math.ceil(jobsTotal / jobsLimit)}
+                  className="h-6 w-6 rounded border text-[11px] disabled:opacity-30" style={{ borderColor: 'var(--color-border)' }}>›</button>
+              </div>
+            )}
+          </div>
           <table className="w-full text-[13px]">
             <thead><tr style={{ color: 'var(--color-text-muted)', borderBottom: '1px solid var(--color-border)' }}>
               <th className="text-left font-medium px-5 py-2.5">类型</th><th className="text-left font-medium px-5 py-2.5">厂区</th>

@@ -16,7 +16,6 @@ def admin_headers() -> dict:
     token = create_access_token(
         user_id="admin-user-id",
         email="admin@example.com",
-        role="admin",
     )
     return {"Authorization": f"Bearer {token}"}
 
@@ -141,16 +140,6 @@ class TestUpdateAiConfig:
         # 未提供的字段不应出现在 set 中
         assert "api_key" not in set_data
         assert "temperature" not in set_data
-
-    @pytest.mark.asyncio
-    async def test_update_ai_config_forbidden_non_admin(self, async_client, auth_headers: dict):
-        """非 admin 用户更新 AI 配置应被拒绝"""
-        response = await async_client.put(
-            "/api/settings/ai-config",
-            headers=auth_headers,
-            json={"model": "gpt-4o"}
-        )
-        assert response.status_code == 403
 
     @pytest.mark.asyncio
     async def test_update_ai_config_unauthorized(self, async_client):
