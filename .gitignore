@@ -37,5 +37,7 @@ scripts/data/
 *.log
 
 # Environment files
+.env
 .env.local
 .env.*.local
+!.env.example
