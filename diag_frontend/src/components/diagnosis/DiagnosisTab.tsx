@@ -343,7 +343,6 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
                     当前厂区：<span className="font-medium" style={{ color: 'var(--color-text-primary)' }}>{factoryLabel}</span>
                     · 点击上方「历史诊断记录」查看
                   </p>
-                  <SupportHint className="justify-center" extra="SIMS/日志/大模型异常可光圈联系libiao1" />
                 </>
               ) : (
                 <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>⏳ 厂区加载中…</p>

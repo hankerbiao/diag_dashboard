@@ -82,10 +82,10 @@ function GuideBlockView({ block }: { block: GuideBlock }) {
   );
 }
 
-export default function GuideTab({ embedded = false }: { embedded?: boolean }) {
+export default function GuideTab({ variant = 'page' }: { variant?: 'page' | 'embedded' | 'modal' }) {
   const [activeId, setActiveId] = useState(GUIDE_SECTIONS[0]?.id ?? '');
   const contentRef = useRef<HTMLDivElement>(null);
-  const sectionPrefix = embedded ? 'settings-guide-' : '';
+  const sectionPrefix = variant === 'page' ? '' : `${variant}-guide-`;
 
   useEffect(() => {
     const root = contentRef.current;
@@ -118,13 +118,15 @@ export default function GuideTab({ embedded = false }: { embedded?: boolean }) {
   return (
     <div
       className={
-        embedded
+        variant === 'embedded'
           ? 'flex min-h-[420px] max-h-[640px] rounded-lg border overflow-hidden'
-          : 'flex-1 flex min-h-0 overflow-hidden'
+          : variant === 'modal'
+            ? 'flex flex-1 min-h-0 rounded-lg border overflow-hidden'
+            : 'flex-1 flex min-h-0 overflow-hidden'
       }
       style={{
         backgroundColor: 'var(--color-bg-primary)',
-        borderColor: embedded ? 'var(--color-border)' : undefined,
+        borderColor: variant !== 'page' ? 'var(--color-border)' : undefined,
       }}
     >
       <nav
@@ -165,8 +167,8 @@ export default function GuideTab({ embedded = false }: { embedded?: boolean }) {
       </nav>
 
       <div ref={contentRef} className="flex-1 overflow-y-auto custom-scrollbar">
-        <div className={embedded ? 'px-5 py-5' : 'max-w-3xl mx-auto px-8 py-8'}>
-          {!embedded && (
+        <div className={variant === 'page' ? 'max-w-3xl mx-auto px-8 py-8' : 'px-5 py-5'}>
+          {variant === 'page' && (
             <div className="mb-8">
               <h2 className="text-lg font-bold mb-2" style={{ color: 'var(--color-text-primary)' }}>
                 WeaveEye 使用文档

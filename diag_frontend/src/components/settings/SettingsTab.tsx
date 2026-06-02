@@ -3,10 +3,13 @@ import { CheckCircle2, AlertCircle, BookOpen } from 'lucide-react';
 import ApiConfig from './ApiConfig';
 import type { ApiConfigHandle } from './ApiConfig';
 import SyncManagement from './SyncManagement';
-import GuideTab from '../guide/GuideTab';
+import GuideModal from '../guide/GuideModal';
+import SupportHint from '../common/SupportHint';
+
 export default function SettingsTab() {
   const apiConfigRef = useRef<ApiConfigHandle>(null);
   const [saving, setSaving] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const showFeedback = useCallback((type: 'success' | 'error', message: string) => {
@@ -40,20 +43,33 @@ export default function SettingsTab() {
         <ApiConfig ref={apiConfigRef} />
 
         <section
-          className="rounded-xl border p-6 space-y-4"
+          className="rounded-xl border p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
           style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
         >
-          <div className="flex items-center gap-2">
-            <BookOpen className="w-5 h-5" style={{ color: 'var(--color-accent)' }} />
-            <h2 className="text-[15px] font-bold" style={{ color: 'var(--color-text-primary)' }}>
-              使用文档
-            </h2>
+          <div className="space-y-2 min-w-0">
+            <div className="flex items-center gap-2">
+              <BookOpen className="w-5 h-5 shrink-0" style={{ color: 'var(--color-accent)' }} />
+              <h2 className="text-[15px] font-bold" style={{ color: 'var(--color-text-primary)' }}>
+                使用文档
+              </h2>
+            </div>
+            <p className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
+              面向产线操作人员的快速指南，含登录、诊断、异常看板与 FAQ。
+            </p>
+            <SupportHint compact />
           </div>
-          <p className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
-            面向产线操作人员的快速指南；遇到问题可光圈联系libiao1。
-          </p>
-          <GuideTab embedded />
+          <button
+            type="button"
+            onClick={() => setGuideOpen(true)}
+            className="shrink-0 px-5 py-2.5 rounded-lg text-[13px] font-bold text-white shadow-sm flex items-center gap-2 transition-all active:scale-[0.98]"
+            style={{ backgroundColor: 'var(--color-accent)', boxShadow: '0 2px 8px -2px var(--color-shadow)' }}
+          >
+            <BookOpen className="w-4 h-4" />
+            查看使用文档
+          </button>
         </section>
+
+        <GuideModal open={guideOpen} onClose={() => setGuideOpen(false)} />
 
         {feedback && (
           <div

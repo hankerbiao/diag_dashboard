@@ -185,7 +185,7 @@ export default function SyncManagement() {
       {/* 标题 */}
       <div className="flex items-center gap-3">
         <Database className="w-5 h-5" style={{ color: 'var(--color-accent)' }} />
-        <h2 className="text-base font-bold" style={{ color: 'var(--color-text-primary)' }}>数据同步管理</h2>
+        <h2 className="text-base font-bold" style={{ color: 'var(--color-text-primary)' }}>数据同步管理（历史数据统计）</h2>
         <span className="text-[11px] px-2 py-0.5 rounded-md font-medium" style={{ backgroundColor: 'var(--color-accent-light)', color: 'var(--color-accent)' }}>自动调度</span>
         <button onClick={() => setShowHistory(true)}
           className="ml-auto h-7 px-3 rounded-lg border text-[11px] font-medium flex items-center gap-1.5 hover:opacity-80"
