@@ -49,6 +49,7 @@ async def trigger_sync(
             col = get_collection("sync_jobs")
             job = {
                 "factory_id": factory or "all",
+                "sync_type": "sims",
                 "status": "running",
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "triggered_by": current_user.get("email", current_user["id"]),

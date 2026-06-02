@@ -5,7 +5,7 @@ import SyncProgressModal from './SyncProgressModal';
 
 const formatTime = (iso: string | null) => {
   if (!iso) return '从未';
-  try { return new Date(iso).toLocaleString('zh-CN'); }
+  try { return new Date(iso).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }); }
   catch { return iso; }
 };
 
@@ -202,8 +202,7 @@ export default function SyncManagement() {
         <table className="w-full text-[13px]">
           <thead><tr style={{ color: 'var(--color-text-muted)', borderBottom: '1px solid var(--color-border)' }}>
             <th className="text-left font-medium px-5 py-3">厂区</th><th className="text-center font-medium px-5 py-3 w-20">启用</th>
-            <th className="text-center font-medium px-5 py-3 w-24">状态</th>
-            <th className="text-left font-medium px-5 py-3">上次同步</th><th className="text-right font-medium px-5 py-3 w-28">操作</th>
+            <th className="text-center font-medium px-5 py-3 w-24">状态</th><th className="text-right font-medium px-5 py-3 w-28">操作</th>
           </tr></thead>
           <tbody>
             {config.sims.factories.map((fac) => (
@@ -228,7 +227,6 @@ export default function SyncManagement() {
                     </span>
                   )}
                 </td>
-                <td className="px-5 py-3 font-mono text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>{formatTime(fac.last_run_at)}</td>
                 <td className="px-5 py-3 text-right">
                   <button onClick={() => handleTriggerSims(fac.factory_id)} disabled={syncingSims[fac.factory_id]}
                     className="h-7 px-2.5 rounded-md border text-[12px] font-medium flex items-center gap-1 ml-auto transition-colors disabled:opacity-50"
