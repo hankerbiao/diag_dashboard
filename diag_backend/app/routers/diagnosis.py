@@ -1,22 +1,30 @@
 import asyncio
 import json
 import logging
-from ..core.utils import utc_now_iso, is_test_failed, is_sims_record_failed, validate_log_path, parse_object_id
+from ..core.utils import (
+    utc_now_iso,
+    is_test_failed,
+    is_sims_record_failed,
+    validate_log_path,
+    parse_object_id,
+    build_log_download_url,
+)
 from typing import Awaitable, Callable, Optional
 
 import httpx
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from ..core.auth import get_current_user
 from ..core.mongodb import get_collection
-from ..core.factory_config import get_factory_by_id
+from ..core.factory_config import get_factory_by_id, load_factories_from_yaml
 from ..models.request import (
     DiagnosisBySNRequest,
     DiagnosisFollowUpRequest,
     SaveSnHistoryRequest,
     AppendChatRequest,
+    ErrorLogAnalyzeContext,
 )
 from ..models.api import ApiResponse
 from ..models.diagnosis import (
@@ -458,25 +466,153 @@ async def analyze_error_log(
 # ── 辅助函数 ──
 
 
-async def _get_error_log_detail(error_log_id: str) -> Optional[dict]:
+def _detail_from_sync_doc(doc: dict, *, client_id: Optional[str] = None) -> dict:
+    return {
+        "id": client_id or str(doc["_id"]),
+        "sn": doc.get("server_sn", ""),
+        "factory_id": doc.get("factory_id", ""),
+        "test_item": doc.get("detailed_flow", doc.get("big_flow", "")),
+        "test_time": doc.get("test_time", ""),
+        "fail_details": doc.get("server_test_result", ""),
+        "fault_type1": doc.get("fault_type1", ""),
+        "fault_type2": doc.get("fault_type2", ""),
+        "fault_type3": doc.get("fault_type3", ""),
+        "log_path": doc.get("log_path", ""),
+    }
+
+
+def _detail_from_analyze_context(error_log_id: str, ctx: ErrorLogAnalyzeContext) -> dict:
+    return {
+        "id": error_log_id,
+        "sn": ctx.server_sn,
+        "factory_id": ctx.factory_id,
+        "test_item": ctx.test_item,
+        "test_time": ctx.test_time,
+        "fail_details": ctx.fail_details,
+        "fault_type1": ctx.fault_type1,
+        "fault_type2": ctx.fault_type2,
+        "fault_type3": ctx.fault_type3,
+        "log_path": ctx.log_path,
+    }
+
+
+def _detail_from_mes_item(item: dict, record_id: str) -> dict:
+    return {
+        "id": record_id,
+        "sn": item.get("server_sn", ""),
+        "factory_id": item.get("factory_id", ""),
+        "test_item": item.get("detailed_flow", item.get("big_flow", "")),
+        "test_time": item.get("test_time", ""),
+        "fail_details": item.get("server_test_result", ""),
+        "fault_type1": item.get("fault_type1", ""),
+        "fault_type2": item.get("fault_type2", ""),
+        "fault_type3": item.get("fault_type3", ""),
+        "log_path": item.get("log_path", ""),
+    }
+
+
+def _parse_mes_client_detail_id(error_log_id: str) -> Optional[dict]:
+    """解析 MES 实时详情合成 ID：{factory_id}_{server_sn}_{test_time}_{idx}"""
+    import re
+
+    for factory in load_factories_from_yaml():
+        factory_id = factory.get("factory_id") or ""
+        prefix = f"{factory_id}_"
+        if not error_log_id.startswith(prefix):
+            continue
+        rest = error_log_id[len(prefix) :]
+        if "_" not in rest:
+            continue
+        body, idx_s = rest.rsplit("_", 1)
+        if not idx_s.isdigit():
+            continue
+        year_match = re.search(r"_((?:19|20)\d{2}[-/])", body)
+        if year_match:
+            server_sn = body[: year_match.start()]
+            test_time = body[year_match.start() + 1 :]
+        else:
+            server_sn, _, test_time = body.partition("_")
+            if not test_time:
+                continue
+        return {
+            "factory_id": factory_id,
+            "server_sn": server_sn,
+            "test_time": test_time,
+            "idx": int(idx_s),
+        }
+    return None
+
+
+def _normalize_test_time(value: object) -> str:
+    """统一测试时间字符串，便于 MES 明细匹配。"""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    return text.replace("T", " ")[:19]
+
+
+async def _lookup_test_detail_from_mes(parsed: dict, record_id: str) -> Optional[dict]:
+    async with MESDirectService() as mes:
+        result = await mes.get_test_details(
+            parsed["factory_id"], parsed["server_sn"], limit=500
+        )
+    items = result.get("items") or []
+    target_time = _normalize_test_time(parsed.get("test_time", ""))
+    for item in items:
+        if _normalize_test_time(item.get("test_time", "")) == target_time:
+            return _detail_from_mes_item(item, record_id)
+    idx = parsed.get("idx", 0)
+    if 0 <= idx < len(items):
+        return _detail_from_mes_item(items[idx], record_id)
+    return None
+
+
+async def _get_error_log_detail(
+    error_log_id: str,
+    context: Optional[ErrorLogAnalyzeContext] = None,
+) -> Optional[dict]:
+    if context and context.server_sn and context.factory_id:
+        return _detail_from_analyze_context(error_log_id, context)
+
     col = get_collection("sync_remote_test_details")
     try:
         doc = await col.find_one({"_id": ObjectId(error_log_id)})
         if doc:
-            return {
-                "id": str(doc["_id"]),
-                "sn": doc.get("server_sn", ""),
-                "factory_id": doc.get("factory_id", ""),
-                "test_item": doc.get("detailed_flow", doc.get("big_flow", "")),
-                "test_time": doc.get("test_time", ""),
-                "fail_details": doc.get("server_test_result", ""),
-                "fault_type1": doc.get("fault_type1", ""),
-                "fault_type2": doc.get("fault_type2", ""),
-                "fault_type3": doc.get("fault_type3", ""),
-                "log_path": doc.get("log_path", ""),
-            }
+            return _detail_from_sync_doc(doc)
     except Exception:
         pass
+
+    parsed = _parse_mes_client_detail_id(error_log_id)
+    if parsed:
+        try:
+            doc = await col.find_one(
+                {
+                    "factory_id": parsed["factory_id"],
+                    "server_sn": parsed["server_sn"],
+                    "test_time": parsed["test_time"],
+                }
+            )
+            if doc:
+                return _detail_from_sync_doc(doc, client_id=error_log_id)
+        except Exception:
+            pass
+        try:
+            mes_detail = await _lookup_test_detail_from_mes(parsed, error_log_id)
+            if mes_detail:
+                return mes_detail
+        except Exception as e:
+            logger.warning(
+                "MES 测试明细回查失败",
+                extra={
+                    "error_log_id": error_log_id,
+                    "factory_id": parsed.get("factory_id"),
+                    "server_sn": parsed.get("server_sn"),
+                    "error": str(e),
+                },
+            )
+
     return await knowledge_graph.get_error_log_by_id(error_log_id)
 
 
@@ -572,7 +708,15 @@ async def _download_log_tail(
     """下载日志尾部。返回 (content, error_message)，成功时 error_message 为 None。"""
     if not log_base_url or not log_path:
         return "", "log_base_url 或 log_path 为空"
-    url = f"{log_base_url.rstrip('/')}/{log_path.lstrip('/')}"
+    url = build_log_download_url(log_base_url, log_path)
+    if not url:
+        return "", "log_base_url 或 log_path 为空"
+    logger.debug(
+        "日志下载 URL log_base_url=%s log_path=%s -> %s",
+        log_base_url,
+        log_path,
+        url,
+    )
     try:
         if url.startswith("ftp://"):
             return await _download_log_tail_ftp(
@@ -664,6 +808,47 @@ def _describe_ftp_error(
     return " | ".join(parts)
 
 
+def _ftp_has_explicit_credentials(
+    url: str,
+    ftp_user: Optional[str],
+    ftp_password: Optional[str],
+) -> bool:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.username:
+        return True
+    return bool(ftp_user or ftp_password)
+
+
+def _tail_text(raw: bytes, tail_lines: int) -> str:
+    text = raw.decode("utf-8", errors="replace")
+    if len(text) > MAX_LOG_BYTES:
+        text = text[-MAX_LOG_BYTES:]
+    lines = text.splitlines()
+    return "\n".join(lines[-tail_lines:] if len(lines) > tail_lines else lines)
+
+
+async def _download_log_tail_ftp_urlopen(url: str, tail_lines: int) -> tuple[str, Optional[str]]:
+    """无凭据 FTP：与 download_ftp.py 一致，使用 urllib 直接拉取完整 URL。"""
+    import urllib.request
+
+    def _fetch() -> bytes:
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            return resp.read()
+
+    try:
+        loop = asyncio.get_event_loop()
+        raw = await loop.run_in_executor(None, _fetch)
+        content = _tail_text(raw, tail_lines)
+        logger.debug("FTP urllib 下载成功 url=%s bytes=%s", url, len(raw))
+        return content, None
+    except Exception as e:
+        detail = f"FTP 日志下载失败 url={url} error={type(e).__name__}: {e}"
+        logger.warning(detail)
+        return "", detail
+
+
 async def _download_log_tail_ftp(
     url: str,
     tail_lines: int,
@@ -671,10 +856,13 @@ async def _download_log_tail_ftp(
     ftp_user: Optional[str] = None,
     ftp_password: Optional[str] = None,
 ) -> tuple[str, Optional[str]]:
-    """通过 FTP 下载日志尾部内容。支持 URL 内嵌账号或厂区 log_ftp_user/log_ftp_password。"""
+    """通过 FTP 下载日志尾部。无厂区凭据时优先 urllib；有凭据时用 ftplib。"""
     from urllib.parse import urlparse, unquote
     import ftplib
     import io
+
+    if not _ftp_has_explicit_credentials(url, ftp_user, ftp_password):
+        return await _download_log_tail_ftp_urlopen(url, tail_lines)
 
     parsed = urlparse(url)
     host = parsed.hostname or "localhost"
@@ -692,7 +880,7 @@ async def _download_log_tail_ftp(
         auth_user = "anonymous"
 
     logger.debug(
-        "FTP 日志下载开始 host=%s port=%s path=%s user=%s anonymous=%s",
+        "FTP ftplib 下载开始 host=%s port=%s path=%s user=%s anonymous=%s",
         host,
         port,
         path,
@@ -712,18 +900,12 @@ async def _download_log_tail_ftp(
             ftp.quit()
 
         await loop.run_in_executor(None, _ftp_download)
-        text = buf.getvalue().decode("utf-8", errors="replace")
-
-        if len(text) > MAX_LOG_BYTES:
-            text = text[-MAX_LOG_BYTES:]
-        lines = text.splitlines()
-        content = "\n".join(lines[-tail_lines:] if len(lines) > tail_lines else lines)
+        content = _tail_text(buf.getvalue(), tail_lines)
         logger.debug(
-            "FTP 日志下载成功 host=%s path=%s bytes=%s lines=%s",
+            "FTP ftplib 下载成功 host=%s path=%s bytes=%s",
             host,
             path,
             len(buf.getvalue()),
-            len(lines),
         )
         return content, None
     except Exception as e:
@@ -736,14 +918,6 @@ async def _download_log_tail_ftp(
             used_anonymous=used_anonymous,
         )
         logger.warning(detail)
-        logger.debug(
-            "FTP 日志下载详情 url=%s host=%s port=%s path=%s user=%s",
-            url,
-            host,
-            port,
-            path,
-            auth_user,
-        )
         return "", detail
 
 
@@ -791,10 +965,34 @@ async def _run_analysis(
     log_base_url: str,
     send_progress: Callable[[str, str], Awaitable[None]],
     send_token: Callable[[str], Awaitable[None]],
+    *,
+    context: Optional[ErrorLogAnalyzeContext] = None,
 ) -> dict:
-    error_log = await _get_error_log_detail(error_log_id)
+    error_log = await _get_error_log_detail(error_log_id, context)
     if not error_log:
-        raise ValueError("未找到异常日志")
+        if context and (context.server_sn or context.log_path):
+            logger.debug(
+                "异常日志未找到，使用前端上下文数据兜底",
+                extra={
+                    "error_log_id": error_log_id,
+                    "server_sn": context.server_sn or "",
+                    "has_log_path": bool(context.log_path),
+                },
+            )
+            error_log = {
+                "id": error_log_id,
+                "sn": context.server_sn or "",
+                "factory_id": context.factory_id or "",
+                "test_item": context.test_item,
+                "test_time": context.test_time,
+                "fail_details": context.fail_details,
+                "fault_type1": context.fault_type1,
+                "fault_type2": context.fault_type2,
+                "fault_type3": context.fault_type3,
+                "log_path": context.log_path,
+            }
+        else:
+            raise ValueError("未找到异常日志")
 
     log_path = (error_log.get("log_path") or "").strip()
     resolved_url, ftp_user, ftp_password = _resolve_log_download_config(
@@ -916,7 +1114,14 @@ async def analyze_error_log_with_kb(
     error_log_id: str,
     current_user: dict = Depends(get_current_user),
     log_base_url: str = Query(""),
+    context: Optional[ErrorLogAnalyzeContext] = Body(None),
 ):
+    logger.debug(
+        "智能剖析请求 context=%s server_sn=%s factory_id=%s",
+        context,
+        context.server_sn if context else None,
+        context.factory_id if context else None,
+    )
     cache_col = get_collection("diagnosis_cache")
     cached = await cache_col.find_one({"error_log_id": error_log_id})
     if cached:
@@ -930,7 +1135,11 @@ async def analyze_error_log_with_kb(
 
     async def _runner(send_progress, send_token):
         return await _run_analysis(
-            error_log_id, log_base_url, send_progress, send_token
+            error_log_id,
+            log_base_url,
+            send_progress,
+            send_token,
+            context=context,
         )
 
     return StreamingResponse(
@@ -943,9 +1152,12 @@ async def re_analyze_error_log(
     error_log_id: str,
     current_user: dict = Depends(get_current_user),
     log_base_url: str = Query(""),
+    context: Optional[ErrorLogAnalyzeContext] = Body(None),
 ):
     await get_collection("diagnosis_cache").delete_one({"error_log_id": error_log_id})
-    return await analyze_error_log_with_kb(error_log_id, current_user, log_base_url)
+    return await analyze_error_log_with_kb(
+        error_log_id, current_user, log_base_url, context
+    )
 
 
 # ── SSE 通用工具 ──

@@ -76,14 +76,24 @@ export const diagnosisApi = {
   },
   async analyzeErrorLogWithKB(errorLogId: string, logBaseUrl?: string) {
     const params = logBaseUrl ? `?log_base_url=${encodeURIComponent(logBaseUrl)}` : '';
-    return fetchApi<DiagnosisCache>(`/api/diagnosis/error-log/${errorLogId}/analyze${params}`, { method: 'POST' });
+    return fetchApi<DiagnosisCache>(`/api/diagnosis/error-log/${encodeURIComponent(errorLogId)}/analyze${params}`, { method: 'POST' });
   },
-  async analyzeSSE(endpoint: string, onProgress: SSECallbacks<DiagnosisCache>['onProgress'],
-    onComplete: SSECallbacks<DiagnosisCache>['onComplete'], onError: SSECallbacks<DiagnosisCache>['onError'],
-    onToken?: SSECallbacks<DiagnosisCache>['onToken']) {
+  async analyzeSSE(
+    endpoint: string,
+    onProgress: SSECallbacks<DiagnosisCache>['onProgress'],
+    onComplete: SSECallbacks<DiagnosisCache>['onComplete'],
+    onError: SSECallbacks<DiagnosisCache>['onError'],
+    onToken?: SSECallbacks<DiagnosisCache>['onToken'],
+    context?: Record<string, string>,
+  ) {
     const token = getAccessToken();
     const resp = await fetch(`${API_BASE_URL}${endpoint}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      ...(context ? { body: JSON.stringify(context) } : {}),
     });
     await consumeSSE(resp, { onProgress, onComplete, onError, onToken });
   },
@@ -131,7 +141,7 @@ export const diagnosisApi = {
   },
   async reAnalyzeErrorLog(errorLogId: string, logBaseUrl?: string) {
     const params = logBaseUrl ? `?log_base_url=${encodeURIComponent(logBaseUrl)}` : '';
-    return fetchApi<DiagnosisCache>(`/api/diagnosis/error-log/${errorLogId}/re-analyze${params}`, { method: 'POST' });
+    return fetchApi<DiagnosisCache>(`/api/diagnosis/error-log/${encodeURIComponent(errorLogId)}/re-analyze${params}`, { method: 'POST' });
   },
   async saveSnHistory(sn: string, factory: string, diagnosisResult: object) {
     return fetchApi<{ id: string }>('/api/diagnosis/sn/save-history', {

@@ -17,6 +17,36 @@ class DiagnosisByErrorLogRequest(BaseModel):
     error_log_id: str
 
 
+class ErrorLogAnalyzeContext(BaseModel):
+    """测试详情行上下文（MES 实时数据），用于智能剖析时避免仅依赖合成 ID 回查。"""
+
+    factory_id: str = ""
+    server_sn: str = ""
+    test_time: str = ""
+    test_item: str = ""
+    fail_details: str = ""
+    log_path: str = ""
+    fault_type1: str = ""
+    fault_type2: str = ""
+    fault_type3: str = ""
+
+    @field_validator(
+        "factory_id",
+        "server_sn",
+        "test_time",
+        "test_item",
+        "fail_details",
+        "log_path",
+        "fault_type1",
+        "fault_type2",
+        "fault_type3",
+        mode="before",
+    )
+    @classmethod
+    def strip_fields(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+
 class GlobalAiConfigUpdateRequest(BaseModel):
     api_key: Optional[str] = None
     base_url: Optional[str] = None

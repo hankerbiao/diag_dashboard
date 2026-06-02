@@ -14,6 +14,22 @@ interface ErrorLogsTabProps {
   factorySites: FactorySite[];
 }
 
+function buildAnalyzeContext(row: ErrorLogRow, factoryId: string, fallbackSn?: string) {
+  const faults = (row.faultTypes || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const logPath = (row.logPath || '').trim();
+  return {
+    factory_id: factoryId,
+    server_sn: row.sn || fallbackSn || '',
+    test_time: row.testTime || '',
+    test_item: row.testItem === '-' ? '' : row.testItem,
+    fail_details: row.status === '-' ? '' : row.status,
+    log_path: logPath && logPath !== '-' ? logPath : '',
+    fault_type1: faults[0] || '',
+    fault_type2: faults[1] || '',
+    fault_type3: faults[2] || '',
+  };
+}
+
 export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProps) {
   // 搜索
   const [sn, setSn] = useState('');
@@ -190,12 +206,15 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
   const handleAnalyze = async (id: string) => {
     setSelectedLogId(id);
     if (analysisResult[id]) return;
+    const row = detailRows.find((r) => r.id === id);
+    if (!row) return;
     setAnalyzingId(id);
     setStreamingText('');
 
     const params = logBaseUrl ? `?log_base_url=${encodeURIComponent(logBaseUrl)}` : '';
+    const encodedId = encodeURIComponent(id);
     await diagnosisApi.analyzeSSE(
-      `/api/diagnosis/error-log/${id}/analyze${params}`,
+      `/api/diagnosis/error-log/${encodedId}/analyze${params}`,
       (_stage, detail) => setAnalyzingProgress({ stage: _stage, detail }),
       (data) => {
         setAnalysisResult((prev) => ({ ...prev, [id]: data }));
@@ -209,17 +228,21 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
         setStreamingText('');
       },
       (text) => setStreamingText((prev) => prev + text),
+      buildAnalyzeContext(row, factory, selectedServer?.server_sn),
     );
   };
 
   const handleReAnalyze = async (id: string) => {
+    const row = detailRows.find((r) => r.id === id);
+    if (!row) return;
     setAnalyzingId(id);
     setAnalyzingProgress(null);
     setStreamingText('');
 
     const params = logBaseUrl ? `?log_base_url=${encodeURIComponent(logBaseUrl)}` : '';
+    const encodedId = encodeURIComponent(id);
     await diagnosisApi.analyzeSSE(
-      `/api/diagnosis/error-log/${id}/re-analyze${params}`,
+      `/api/diagnosis/error-log/${encodedId}/re-analyze${params}`,
       (_stage, detail) => setAnalyzingProgress({ stage: _stage, detail }),
       (data) => {
         setAnalysisResult((prev) => ({ ...prev, [id]: data }));
@@ -233,6 +256,7 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
         setStreamingText('');
       },
       (text) => setStreamingText((prev) => prev + text),
+      buildAnalyzeContext(row, factory, selectedServer?.server_sn),
     );
   };
 
@@ -363,6 +387,7 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
           analysisResult={analysisResult}
           onAnalyze={handleAnalyze}
           onClose={() => setShowDetailModal(false)}
+          factory={factory}
           logBaseUrl={logBaseUrl}
         />
       )}

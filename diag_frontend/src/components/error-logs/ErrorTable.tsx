@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Bot, CheckCircle2, RefreshCw, ArrowUpDown, XCircle, Info, Download } from 'lucide-react';
+import { Bot, CheckCircle2, RefreshCw, ArrowUpDown, Info, Download, Loader2, X } from 'lucide-react';
 import type { ErrorLogRow } from '../../types';
-import type { DiagnosisCache } from '../../api/fastapi';
+import { diagnosisApi, type DiagnosisCache } from '../../api/fastapi';
 import ResultBadge, { isFailureStatus } from '../common/ResultBadge';
 
 interface ErrorTableProps {
@@ -11,7 +11,24 @@ interface ErrorTableProps {
   analyzingId: string | null;
   analysisResult: Record<string, DiagnosisCache>;
   onAnalyze: (id: string) => void;
+  /** 厂区 ID，走后端 /api/diagnosis/sn/log-content */
+  factory?: string;
+  /** 与厂区配置一致，用于判断是否具备日志下载能力 */
   logBaseUrl?: string;
+  /** 测试详情所属服务器 SN（行内 sn 为空时回退） */
+  serverSn?: string;
+}
+
+function hasMesLogPath(logPath?: string): boolean {
+  const p = (logPath ?? '').trim();
+  return p.length > 0 && p !== '-';
+}
+
+interface LogViewerState {
+  title: string;
+  logPath: string;
+  content: string;
+  error: string;
 }
 
 type SortField = 'status' | 'decision' | null;
@@ -26,9 +43,62 @@ function translateDecision(decision: string): string {
   return DECISION_MAP[lower] || decision || '-';
 }
 
-export default function ErrorTable({ data, loading, emptyHint, analyzingId, analysisResult, onAnalyze, logBaseUrl = '' }: ErrorTableProps) {
+export default function ErrorTable({
+  data,
+  loading,
+  emptyHint,
+  analyzingId,
+  analysisResult,
+  onAnalyze,
+  factory = '',
+  logBaseUrl = '',
+  serverSn = '',
+}: ErrorTableProps) {
   const [sortField, setSortField] = useState<SortField>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [logViewer, setLogViewer] = useState<LogViewerState | null>(null);
+
+  const canUseLogApi = Boolean(factory || logBaseUrl);
+
+  const canDownloadLog = (row: ErrorLogRow) => {
+    const sn = (row.sn || serverSn || '').trim();
+    return Boolean(canUseLogApi && sn && hasMesLogPath(row.logPath));
+  };
+
+  const handleDownloadLog = async (row: ErrorLogRow) => {
+    if (!canDownloadLog(row)) return;
+    const sn = (row.sn || serverSn || '').trim();
+    if (!factory) return;
+    setDownloadingId(row.id);
+    try {
+      const res = await diagnosisApi.getLogContent(sn, factory, row.logPath.trim());
+      if (res.success && res.data?.content) {
+        setLogViewer({
+          title: `${row.testItem || '测试日志'} · ${row.sn}`,
+          logPath: row.logPath,
+          content: res.data.content,
+          error: '',
+        });
+      } else {
+        setLogViewer({
+          title: `${row.testItem || '测试日志'} · ${row.sn}`,
+          logPath: row.logPath,
+          content: '',
+          error: res.error || '日志下载失败',
+        });
+      }
+    } catch {
+      setLogViewer({
+        title: `${row.testItem || '测试日志'} · ${row.sn}`,
+        logPath: row.logPath,
+        content: '',
+        error: '网络请求失败',
+      });
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   const toggleSort = (field: 'status' | 'decision') => {
     if (sortField === field) {
@@ -71,6 +141,7 @@ export default function ErrorTable({ data, loading, emptyHint, analyzingId, anal
   }
 
   return (
+    <>
     <div className="flex-1 overflow-auto custom-scrollbar">
       <table className="w-full text-left border-collapse text-[13px] whitespace-nowrap min-w-max">
         <thead
@@ -178,24 +249,35 @@ export default function ErrorTable({ data, loading, emptyHint, analyzingId, anal
                 )}
               </td>
               <td className="px-5 py-3.5 text-center">
-                {row.logPath && row.logPath !== '-' && logBaseUrl ? (
+                {!canUseLogApi ? (
+                  <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>-</span>
+                ) : canDownloadLog(row) ? (
                   <button
-                    onClick={() => {
-                      const logPath = row.logPath.replace(/^\//, '');
-                      window.open(`${logBaseUrl}/${logPath}`, '_blank', 'noopener,noreferrer');
-                    }}
-                    className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded border transition-colors hover:opacity-80"
+                    type="button"
+                    onClick={() => handleDownloadLog(row)}
+                    disabled={downloadingId === row.id}
+                    className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded border transition-colors hover:opacity-80 disabled:opacity-50"
                     style={{
                       backgroundColor: 'var(--color-bg-primary)',
                       borderColor: 'var(--color-border)',
                       color: 'var(--color-text-primary)',
                     }}
                   >
-                    <Download className="w-3 h-3" />
-                    下载日志
+                    {downloadingId === row.id ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Download className="w-3 h-3" />
+                    )}
+                    {downloadingId === row.id ? '下载中' : '下载日志'}
                   </button>
                 ) : (
-                  <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>-</span>
+                  <span
+                    className="text-xs"
+                    style={{ color: 'var(--color-text-muted)' }}
+                    title="SIMS 未返回 log 字段"
+                  >
+                    无日志
+                  </span>
                 )}
               </td>
             </tr>
@@ -203,5 +285,52 @@ export default function ErrorTable({ data, loading, emptyHint, analyzingId, anal
         </tbody>
       </table>
     </div>
+
+    {logViewer && (
+      <div
+        className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+        style={{ backgroundColor: 'rgba(15, 23, 42, 0.55)' }}
+        onClick={() => setLogViewer(null)}
+      >
+        <div
+          className="flex flex-col w-full max-w-3xl max-h-[80vh] rounded-xl border shadow-xl"
+          style={{ backgroundColor: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-start justify-between gap-3 px-4 py-3 border-b" style={{ borderColor: 'var(--color-border)' }}>
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold truncate" style={{ color: 'var(--color-text-primary)' }}>
+                {logViewer.title}
+              </h3>
+              <p className="text-[11px] font-mono truncate mt-0.5" style={{ color: 'var(--color-text-muted)' }} title={logViewer.logPath}>
+                {logViewer.logPath}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setLogViewer(null)}
+              className="p-1 rounded-md hover:opacity-80 shrink-0"
+              style={{ color: 'var(--color-text-secondary)' }}
+              aria-label="关闭"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-auto custom-scrollbar p-4">
+            {logViewer.error ? (
+              <p className="text-sm" style={{ color: '#dc2626' }}>{logViewer.error}</p>
+            ) : (
+              <pre
+                className="text-[11px] leading-relaxed whitespace-pre-wrap break-all font-mono rounded-lg p-3 border"
+                style={{ backgroundColor: '#1a1b26', borderColor: '#334155', color: '#94a3b8' }}
+              >
+                {logViewer.content}
+              </pre>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

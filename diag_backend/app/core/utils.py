@@ -57,13 +57,38 @@ def is_sims_record_failed(record: dict) -> bool:
 
 
 def validate_log_path(log_path: str) -> str:
-    """校验相对日志路径，防止 SSRF / 路径遍历。"""
+    """校验日志相对路径，防止 SSRF / 路径遍历。
+
+    SIMS 常返回 ``/log//{sn}/file.log`` 或 ``/{sn}/file.log``，允许前导斜杠。
+    """
     path = (log_path or "").strip()
     if not path:
         raise ValueError("日志路径不能为空")
-    if "://" in path or path.startswith(("/", "\\")) or ".." in path.split("/"):
+    if "://" in path:
+        raise ValueError("无效的日志路径")
+    normalized = path.replace("\\", "/")
+    if ".." in normalized.split("/"):
         raise ValueError("无效的日志路径")
     return path
+
+
+def build_log_download_url(log_base_url: str, log_path: str) -> str:
+    """拼接日志下载 URL。
+
+    SIMS 的 log 字段常为 ``/610226.../file.log``，FTP 实际目录为 ``/log//{sn}/file``，
+    与 ``download_ftp.py`` 中 ``ftp://host/log//sn/file`` 一致。
+    """
+    base = (log_base_url or "").strip().rstrip("/")
+    path = (log_path or "").strip().replace("\\", "/")
+    if not base or not path:
+        return ""
+    while path.startswith("/"):
+        path = path[1:]
+    if base.lower().startswith("ftp://"):
+        if path.startswith("log/") or path.startswith("log//"):
+            return f"{base}/{path}"
+        return f"{base}/log//{path}"
+    return f"{base}/{path}"
 
 
 def parse_object_id(doc_id: str) -> ObjectId:

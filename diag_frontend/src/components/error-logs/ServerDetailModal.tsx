@@ -13,6 +13,7 @@ interface ServerDetailModalProps {
   analysisResult: Record<string, DiagnosisCache>;
   onAnalyze: (id: string) => void;
   onClose: () => void;
+  factory?: string;
   logBaseUrl?: string;
 }
 
@@ -33,6 +34,7 @@ export default function ServerDetailModal({
   analysisResult,
   onAnalyze,
   onClose,
+  factory = '',
   logBaseUrl = '',
 }: ServerDetailModalProps) {
   const stateInfo = mapServerState(server.server_state);
@@ -167,7 +169,9 @@ export default function ServerDetailModal({
               analyzingId={analyzingId}
               analysisResult={analysisResult}
               onAnalyze={onAnalyze}
+              factory={factory}
               logBaseUrl={logBaseUrl}
+              serverSn={server.server_sn}
             />
           </div>
         </div>
