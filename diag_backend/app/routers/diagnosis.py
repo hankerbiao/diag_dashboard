@@ -28,7 +28,7 @@ from ..models.diagnosis import (
 )
 from ..services.llm_service import llm_service
 from ..services.knowledge_graph import knowledge_graph
-from ..services.mes_direct_service import MESDirectService
+from ..services.mes_direct_service import MESDirectService, MESRequestError
 from ..services import ragflow_service
 
 logger = logging.getLogger(__name__)
@@ -69,12 +69,45 @@ async def _gather_sn_data(
     device = await knowledge_graph.get_device_by_sn(sn)
 
     await _progress("sims", f"正在向 SIMS（{factory_label}）实时查询测试数据...")
+    sims_path = "/stepsmanagement/resultInfo/queryTestList.action"
+    sims_params = {"start": 0, "limit": 50, "serverSN": sn, "customerID": ""}
     async with MESDirectService() as mes:
         try:
             result = await mes.get_test_details(factory, server_sn=sn, limit=50)
             raw_logs = result["items"]
+        except MESRequestError as e:
+            debug = e.debug
+            logger.warning(
+                "SIMS 查询失败 [%s] sn=%s factory=%s url=%s params=%s error=%s",
+                factory_label,
+                sn,
+                factory,
+                debug.get("url"),
+                debug.get("params"),
+                e,
+            )
+            logger.debug(
+                "SIMS 查询请求详情: %s",
+                json.dumps(debug, ensure_ascii=False, default=str),
+            )
+            raise ValueError(
+                f"SIMS 查询失败 [{factory_label}]: 请确认 SN 正确且厂区 SIMS 可达。"
+            ) from e
         except Exception as e:
-            logger.warning("SIMS 查询异常", extra={"sn": sn, "factory": factory, "error": str(e)})
+            debug = mes._request_debug(factory, sims_path, sims_params)
+            logger.warning(
+                "SIMS 查询异常 [%s] sn=%s factory=%s url=%s params=%s error=%s",
+                factory_label,
+                sn,
+                factory,
+                debug.get("url"),
+                debug.get("params"),
+                e,
+            )
+            logger.debug(
+                "SIMS 查询请求详情: %s",
+                json.dumps(debug, ensure_ascii=False, default=str),
+            )
             raise ValueError(
                 f"SIMS 查询失败 [{factory_label}]: 请确认 SN 正确且厂区 SIMS 可达。"
             ) from e
