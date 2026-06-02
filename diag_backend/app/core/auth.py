@@ -1,7 +1,7 @@
 """
 本地 JWT 认证模块
 """
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
@@ -10,6 +10,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 from .config import get_settings
+from .utils import utc_now
 
 settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -28,7 +29,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(user_id: str, email: str, expires_delta: Optional[timedelta] = None) -> str:
     """创建访问令牌"""
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
+    expire = utc_now() + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
     to_encode = {
         "sub": user_id,
         "email": email,

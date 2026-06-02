@@ -1,12 +1,12 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from ..core.utils import utc_now_iso, is_test_failed, is_sims_record_failed, validate_log_path, parse_object_id
 from typing import Awaitable, Callable, Optional
 
 import httpx
 from bson import ObjectId
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from ..core.auth import get_current_user
@@ -14,13 +14,12 @@ from ..core.mongodb import get_collection
 from ..core.factory_config import get_factory_by_id
 from ..models.request import (
     DiagnosisBySNRequest,
-    DiagnosisByErrorLogRequest,
     DiagnosisFollowUpRequest,
     SaveSnHistoryRequest,
     AppendChatRequest,
 )
-from ..models.response import (
-    ApiResponse,
+from ..models.api import ApiResponse
+from ..models.diagnosis import (
     DiagnosisCacheResponse,
     DiagnosisResponse,
     ErrorAnalysisResponse,
@@ -29,6 +28,7 @@ from ..models.response import (
 )
 from ..services.llm_service import llm_service
 from ..services.knowledge_graph import knowledge_graph
+from ..services.mes_direct_service import MESDirectService
 from ..services import ragflow_service
 
 logger = logging.getLogger(__name__)
@@ -55,45 +55,63 @@ async def _gather_sn_data(
     factory: str,
     on_progress: Optional[Callable[[str, str], Awaitable[None]]] = None,
 ) -> tuple[dict, list[dict], list[dict], list[dict], list[dict], str, list[dict]]:
-    """收集 SN 诊断所需数据。返回 (device, test_logs, maintenance, all_logs, similar_cases, kb_context, failed_logs)"""
-    col = get_collection("sync_remote_test_details")
-
+    """收集 SN 诊断所需数据。返回 (device, llm_logs, maintenance, all_logs, similar_cases, kb_context, failed_logs)"""
     async def _progress(s: str, d: str):
         if on_progress:
             await on_progress(s, d)
 
+    factory_cfg = get_factory_by_id(factory)
+    if not factory_cfg:
+        raise ValueError(f"厂区不存在: {factory}")
+    factory_label = factory_cfg["name"]
+
     await _progress("device", "正在查询设备信息...")
     device = await knowledge_graph.get_device_by_sn(sn)
-    if not device:
-        exists = await col.find_one({"server_sn": sn})
-        if exists:
-            device = {"id": "", "sn": sn, "model": "", "factory": factory}
-        else:
-            raise ValueError("未找到设备信息")
 
-    await _progress("logs", "正在检索测试日志...")
-    test_logs = (
-        await knowledge_graph.get_device_test_logs(device["id"]) if device["id"] else []
-    )
+    await _progress("sims", f"正在向 SIMS（{factory_label}）实时查询测试数据...")
+    async with MESDirectService() as mes:
+        try:
+            result = await mes.get_test_details(factory, server_sn=sn, limit=50)
+            raw_logs = result["items"]
+        except Exception as e:
+            logger.warning("SIMS 查询异常", extra={"sn": sn, "factory": factory, "error": str(e)})
+            raise ValueError(
+                f"SIMS 查询失败 [{factory_label}]: 请确认 SN 正确且厂区 SIMS 可达。"
+            ) from e
+
+        if not raw_logs:
+            raise ValueError(
+                f"SIMS 未查询到 SN「{sn}」在「{factory_label}」的测试记录（0 条），"
+                f"请确认 SN 与厂区选择正确，且该设备已在 SIMS 中参与测试。"
+            )
+
+        if not device:
+            server = await mes.get_server(factory, sn)
+            device = {
+                "id": "",
+                "sn": sn,
+                "model": server.model if server else "",
+                "factory": factory,
+            }
+
     maintenance = (
         await knowledge_graph.get_device_maintenance_history(device["id"])
-        if device["id"]
+        if device.get("id")
         else []
     )
-
-    raw_logs = (
-        await col.find({"server_sn": sn}).sort("test_time", -1).limit(50).to_list(50)
+    mongo_test_logs = (
+        await knowledge_graph.get_device_test_logs(device["id"]) if device.get("id") else []
     )
-    detail_logs = []
+
+    detail_logs: list[dict] = []
     failed_logs: list[dict] = []
-    for r in raw_logs:
-        result = r.get("server_test_result", "")
-        is_fail = result and result.upper() not in ("PASS", "OK", "通过", "")
+    for idx, r in enumerate(raw_logs):
+        result_status = (r.get("server_test_result") or r.get("decision") or "").strip()
         log_entry = dict(
-            id=str(r["_id"]),
+            id=str(r.get("_id", f"mes_{factory}_{sn}_{idx}")),
             test_item=r.get("detailed_flow", r.get("big_flow", "")),
             test_time=str(r.get("test_time", "")),
-            fail_details=result,
+            fail_details=result_status,
             fault_type1=r.get("fault_type1", ""),
             fault_type2=r.get("fault_type2", ""),
             fault_type3=r.get("fault_type3", ""),
@@ -102,44 +120,57 @@ async def _gather_sn_data(
             log_path=r.get("log_path", ""),
         )
         detail_logs.append(log_entry)
-        if is_fail:
+        if is_sims_record_failed(r):
             failed_logs.append(log_entry)
 
     seen = set()
     all_logs: list[dict] = []
     for log in detail_logs + [
         dict(
-            id=l.get("id", ""),
-            test_item=l.get("test_item", ""),
-            test_time=str(l.get("test_time", "")),
-            fail_details=l.get("fail_details", ""),
-            log_path=l.get("log_path", ""),
+            id=tl.get("id", ""),
+            test_item=tl.get("test_item", ""),
+            test_time=str(tl.get("test_time", "")),
+            fail_details=tl.get("fail_details", ""),
+            log_path=tl.get("log_path", ""),
         )
-        for l in test_logs
+        for tl in mongo_test_logs
     ]:
-        key = (log["test_item"], log["test_time"])
+        key = (log["test_item"], log["test_time"], log.get("fail_details", ""))
         if key not in seen:
             seen.add(key)
             all_logs.append(log)
 
-    await _progress("cases", "正在匹配历史案例...")
-    similar_cases = await knowledge_graph.find_similar_cases(
-        ",".join([l.get("fail_details", "") for l in test_logs[:5]])
-    )
+    llm_logs = all_logs
+
+    if failed_logs:
+        await _progress("cases", f"正在匹配历史案例（{len(failed_logs)} 条失败项）...")
+    else:
+        await _progress("cases", "未发现失败用例，将基于全部测试记录分析...")
+
+    case_terms: list[str] = []
+    for fl in failed_logs[:5]:
+        if fl.get("test_item"):
+            case_terms.append(fl["test_item"])
+        if fl.get("fail_details"):
+            case_terms.append(fl["fail_details"])
+        for ft in ("fault_type1", "fault_type2", "fault_type3"):
+            if fl.get(ft):
+                case_terms.append(fl[ft])
+    search_text = " ".join(case_terms).strip()
+    similar_cases: list[dict] = []
+    if search_text:
+        try:
+            similar_cases = await knowledge_graph.find_similar_cases(search_text)
+        except Exception as e:
+            logger.warning("相似案例检索失败", extra={"sn": sn, "error": str(e)})
 
     # RAGFlow 知识库检索 — 以失败用例为搜索上下文
     await _progress("ragflow", "正在检索知识库...")
     kb_context = ""
     try:
-        search_terms = []
-        for fl in failed_logs[:5]:
-            search_terms.append(fl["test_item"])
-            if fl.get("fail_details"):
-                search_terms.append(fl["fail_details"])
-        # 也从 raw_logs 补充 fault_type
+        search_terms = list(case_terms)
         for r in raw_logs[:10]:
-            result = r.get("server_test_result", "")
-            if result and result.upper() not in ("PASS", "OK", "通过", ""):
+            if is_sims_record_failed(r):
                 for ft in ("fault_type1", "fault_type2", "fault_type3"):
                     val = r.get(ft, "")
                     if val:
@@ -169,7 +200,7 @@ async def _gather_sn_data(
 
     return (
         device,
-        test_logs,
+        llm_logs,
         maintenance,
         all_logs,
         similar_cases,
@@ -178,12 +209,31 @@ async def _gather_sn_data(
     )
 
 
+def _map_test_log_items(logs: list[dict]) -> list:
+    return [
+        {
+            "id": str(log.get("id", "")),
+            "test_item": log.get("test_item", ""),
+            "test_time": str(log.get("test_time", "")),
+            "fail_details": log.get("fail_details", ""),
+            "fault_type1": log.get("fault_type1", ""),
+            "fault_type2": log.get("fault_type2", ""),
+            "fault_type3": log.get("fault_type3", ""),
+            "decision": log.get("decision", ""),
+            "big_flow": log.get("big_flow", ""),
+            "log_path": log.get("log_path", ""),
+        }
+        for log in logs
+    ]
+
+
 def _build_sn_response(
     sn: str,
     diagnosis: dict,
     maintenance: list[dict],
     all_logs: list[dict],
     similar_cases: list[dict],
+    failed_logs: Optional[list[dict]] = None,
 ) -> DiagnosisResponse:
     return DiagnosisResponse(
         sn=sn,
@@ -204,11 +254,12 @@ def _build_sn_response(
             }
             for m in maintenance[:5]
         ],
-        test_logs=all_logs[:10],
+        test_logs=_map_test_log_items(all_logs[:10]),
+        failed_test_logs=_map_test_log_items((failed_logs or [])[:20]),
         similar_cases=[
             dict(
                 id=c.get("id", ""),
-                title=c.get("title", ""),
+                title=c.get("title") or c.get("root_cause", ""),
                 root_cause=c.get("root_cause", ""),
                 similarity=c.get("similarity", 0.0),
             )
@@ -224,7 +275,7 @@ async def diagnose_by_sn(
     try:
         (
             device,
-            test_logs,
+            llm_logs,
             maintenance,
             all_logs,
             similar_cases,
@@ -234,7 +285,7 @@ async def diagnose_by_sn(
         diagnosis = await llm_service.diagnose_sn(
             request.sn,
             device,
-            test_logs,
+            llm_logs,
             maintenance,
             similar_cases,
             kb_context=kb_context,
@@ -245,7 +296,7 @@ async def diagnose_by_sn(
             extra={
                 "sn": request.sn,
                 "factory": request.factory,
-                "test_logs_count": len(test_logs),
+                "test_logs_count": len(llm_logs),
                 "similar_cases_count": len(similar_cases),
                 "kb_context_length": len(kb_context) if kb_context else 0,
             },
@@ -253,7 +304,7 @@ async def diagnose_by_sn(
         return ApiResponse(
             success=True,
             data=_build_sn_response(
-                request.sn, diagnosis, maintenance, all_logs, similar_cases
+                request.sn, diagnosis, maintenance, all_logs, similar_cases, failed_logs
             ),
         )
     except ValueError as e:
@@ -294,17 +345,20 @@ async def get_sn_log_content(
 ):
     """下载 SN 关联的错误日志原文"""
     try:
+        safe_path = validate_log_path(log_path)
         factory_info = get_factory_by_id(request.factory)
-        log_base_url = factory_info.get("log_base_url", "") if factory_info else ""
-        if not log_base_url or not log_path:
-            return ApiResponse(
-                success=False, error="日志路径或厂区 log_base_url 未配置"
-            )
+        if not factory_info:
+            return ApiResponse(success=False, error=f"厂区不存在: {request.factory}")
+        log_base_url = factory_info.get("log_base_url", "")
+        if not log_base_url:
+            return ApiResponse(success=False, error="厂区 log_base_url 未配置")
 
-        content = await _download_log_tail(log_base_url, log_path)
+        content = await _download_log_tail(log_base_url, safe_path)
         if not content:
             return ApiResponse(success=False, error="日志内容为空或下载失败")
         return ApiResponse(success=True, data={"content": content})
+    except ValueError as e:
+        return ApiResponse(success=False, error=str(e))
     except Exception as e:
         logger.exception(
             "日志下载失败",
@@ -396,7 +450,7 @@ async def _download_log_tail(
                         for elem in list(tree.iter(tag)):
                             elem.drop_tree()
                     lines = [
-                        l for l in tree.text_content().strip().splitlines() if l.strip()
+                        ln for ln in tree.text_content().strip().splitlines() if ln.strip()
                     ]
                     return "\n".join(lines)
                 except Exception as e:
@@ -553,7 +607,7 @@ async def _run_analysis(
         error_log, "\n\n".join(sections), send_token
     )
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     cache_doc = {
         "error_log_id": error_log_id,
         "sn": error_log.get("sn", ""),
@@ -678,7 +732,7 @@ async def diagnose_sn_stream(
     async def _runner(send_progress, send_token):
         (
             device,
-            test_logs,
+            llm_logs,
             maintenance,
             all_logs,
             similar_cases,
@@ -692,7 +746,7 @@ async def diagnose_sn_stream(
         diagnosis = await llm_service.diagnose_sn_stream(
             request.sn,
             device,
-            test_logs,
+            llm_logs,
             maintenance,
             similar_cases,
             send_token,
@@ -701,7 +755,7 @@ async def diagnose_sn_stream(
         )
 
         return _build_sn_response(
-            request.sn, diagnosis, maintenance, all_logs, similar_cases
+            request.sn, diagnosis, maintenance, all_logs, similar_cases, failed_logs
         ).model_dump()
 
     return StreamingResponse(_sse_wrap(_runner), media_type="text/event-stream")
@@ -718,6 +772,7 @@ async def save_sn_history(
     try:
         result = request.diagnosis_result
         doc = {
+            "user_id": current_user["id"],
             "sn": request.sn,
             "factory": request.factory,
             "category": result.get("category", ""),
@@ -725,8 +780,8 @@ async def save_sn_history(
             "summary": result.get("summary", ""),
             "diagnosis_result": result,
             "chat_messages": [],
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": utc_now_iso(),
+            "updated_at": utc_now_iso(),
         }
         col = get_collection("diagnosis_sn_history")
         insert_result = await col.insert_one(doc)
@@ -750,20 +805,22 @@ async def append_chat_message(
     try:
         col = get_collection("diagnosis_sn_history")
         result = await col.update_one(
-            {"_id": ObjectId(history_id)},
+            {"_id": parse_object_id(history_id), "user_id": current_user["id"]},
             {
                 "$push": {
                     "chat_messages": {"role": request.role, "content": request.content}
                 },
-                "$set": {"updated_at": datetime.now(timezone.utc).isoformat()},
+                "$set": {"updated_at": utc_now_iso()},
             },
         )
         if result.matched_count == 0:
-            return ApiResponse(success=False, error="历史记录不存在")
+            return ApiResponse(success=False, error="历史记录不存在或无权访问")
         logger.info(
             "追加对话成功", extra={"history_id": history_id, "role": request.role}
         )
         return ApiResponse(success=True)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("追加对话失败", extra={"history_id": history_id})
         return ApiResponse(success=False, error=f"追加失败: {e}")
@@ -780,7 +837,7 @@ async def list_sn_history(
     """查询 SN 诊断历史记录列表"""
     try:
         col = get_collection("diagnosis_sn_history")
-        query = {}
+        query: dict = {"user_id": current_user["id"]}
         if sn:
             query["sn"] = sn
         if factory:
@@ -831,9 +888,11 @@ async def get_sn_history_detail(
     """查询单条诊断历史完整记录（含对话）"""
     try:
         col = get_collection("diagnosis_sn_history")
-        doc = await col.find_one({"_id": ObjectId(history_id)})
+        doc = await col.find_one(
+            {"_id": parse_object_id(history_id), "user_id": current_user["id"]}
+        )
         if not doc:
-            return ApiResponse(success=False, error="历史记录不存在")
+            return ApiResponse(success=False, error="历史记录不存在或无权访问")
 
         return ApiResponse(
             success=True,

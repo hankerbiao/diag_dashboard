@@ -2,7 +2,7 @@
 MongoDB 索引初始化 - 应用启动时自动创建必要的索引
 """
 import logging
-from datetime import datetime, timezone
+from ..core.utils import utc_now_iso
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -110,6 +110,9 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
     await db["diagnosis_sn_history"].create_index(
         [("sn", 1), ("created_at", -1)], name="idx_diagnosis_sn_history_sn_time"
     )
+    await db["diagnosis_sn_history"].create_index(
+        [("user_id", 1), ("created_at", -1)], name="idx_diagnosis_sn_history_user_time"
+    )
 
     # ---- knowledge_documents ----
     await db["knowledge_documents"].create_index(
@@ -127,7 +130,7 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
 
 async def seed_default_data(db: AsyncIOMotorDatabase):
     """首次部署时写入默认厂区和自动同步配置（幂等）"""
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
 
     # 从 YAML 配置读取厂区列表（单一数据源）
     try:
@@ -193,7 +196,7 @@ async def seed_global_ai_config(db: AsyncIOMotorDatabase):
             "temperature": env_settings.ai_temperature or 0.7,
             "provider": "openai",
             "updated_by": "system",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": utc_now_iso(),
         }},
         upsert=True
     )

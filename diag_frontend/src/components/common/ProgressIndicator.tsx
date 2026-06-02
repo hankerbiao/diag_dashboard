@@ -5,10 +5,17 @@ interface ProgressIndicatorProps {
   stages: Stage[];
   labels: Record<string, string>;
   currentStage: string | null;
+  currentDetail?: string;
   streamingText?: string;
 }
 
-export default function ProgressIndicator({ stages, labels, currentStage, streamingText }: ProgressIndicatorProps) {
+export default function ProgressIndicator({
+  stages,
+  labels,
+  currentStage,
+  currentDetail,
+  streamingText,
+}: ProgressIndicatorProps) {
   const curIdx = currentStage ? stages.indexOf(currentStage) : 0;
 
   return (
@@ -37,7 +44,9 @@ export default function ProgressIndicator({ stages, labels, currentStage, stream
             </span>
             {cur && currentStage && (
               <span className="text-[11px] animate-pulse" style={{ color: 'var(--color-accent)' }}>
-                {currentStage === stages[stages.length - 1] ? streamingText || '推理中...' : labels[currentStage] || ''}
+                {currentStage === stages[stages.length - 1]
+                  ? streamingText || '推理中...'
+                  : currentDetail || ''}
               </span>
             )}
           </div>

@@ -1,11 +1,16 @@
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, Field, field_validator
+from typing import List, Literal, Optional
 
 
 class DiagnosisBySNRequest(BaseModel):
-    sn: str
-    factory: str
+    sn: str = Field(..., min_length=1)
+    factory: str = Field(..., min_length=1)
     include_history: bool = True
+
+    @field_validator("sn", "factory")
+    @classmethod
+    def strip_whitespace(cls, v: str) -> str:
+        return v.strip()
 
 
 class DiagnosisByErrorLogRequest(BaseModel):
@@ -41,14 +46,19 @@ class DiagnosisFollowUpRequest(BaseModel):
 
 
 class SaveSnHistoryRequest(BaseModel):
-    sn: str
-    factory: str
+    sn: str = Field(..., min_length=1)
+    factory: str = Field(..., min_length=1)
     diagnosis_result: dict
+
+    @field_validator("sn", "factory")
+    @classmethod
+    def strip_whitespace(cls, v: str) -> str:
+        return v.strip()
 
 
 class AppendChatRequest(BaseModel):
-    role: str
-    content: str
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1)
 
 
 class FactoryOverride(BaseModel):

@@ -17,8 +17,8 @@ DEFAULT_YAML_PATH = os.path.join(CONFIG_DIR, "factories.yaml")
 
 
 def load_factories_from_yaml(path: Optional[str] = None) -> list[dict]:
-    """从 YAML 文件读取厂区列表"""
-    filepath = path or (get_settings().factories_yaml_path or DEFAULT_YAML_PATH)
+    """从 YAML 文件读取厂区列表 (Settings.factories_yaml_path 优先)"""
+    filepath = path or get_settings().factories_yaml_path or DEFAULT_YAML_PATH
     if yaml is None:
         raise RuntimeError("PyYAML is required to load factory config: pip install pyyaml")
     if not os.path.exists(filepath):

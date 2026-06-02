@@ -1,11 +1,11 @@
 """Analytics Service - Pre-computed dashboard data cached in MongoDB"""
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
+from ..core.utils import utc_now
 from typing import Optional
 from ..core.factory_config import load_factories_from_yaml
 from ..core.mongodb import get_collection
-from ..core.utils import singleton
 
 SNAPSHOT_COLLECTION = "analytics_snapshots"
 DEFAULT_DAYS = 30
@@ -15,7 +15,6 @@ def _key(trend: str, days: int, **kwargs) -> str:
     return ":".join([f"insights:{trend}:{days}"] + [f"{k[:2]}:{v}" for k, v in kwargs.items() if v])
 
 
-@singleton
 class AnalyticsService:
     def __init__(self):
         self._task: Optional[asyncio.Task] = None
@@ -61,7 +60,7 @@ class AnalyticsService:
         try:
             await get_collection(SNAPSHOT_COLLECTION).update_one(
                 {"_id": key},
-                {"$set": {"data": data, "computed_at": datetime.now(timezone.utc)}},
+                {"$set": {"data": data, "computed_at": utc_now()}},
                 upsert=True)
         except Exception:
             pass
@@ -70,7 +69,7 @@ class AnalyticsService:
                        search_sn: Optional[str] = None, search_product_models: Optional[str] = None) -> dict:
         details = get_collection("sync_remote_test_details")
         servers = get_collection("sync_remote_servers")
-        match = {"test_time": {"$gte": (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()}}
+        match = {"test_time": {"$gte": (utc_now() - timedelta(days=days)).isoformat()}}
         if factory_id:
             match["factory_id"] = factory_id
         if search_sn:
@@ -193,5 +192,11 @@ class AnalyticsService:
             self._task = None
 
 
+_analytics_service: Optional[AnalyticsService] = None
+
+
 def get_analytics_service() -> AnalyticsService:
-    return AnalyticsService()
+    global _analytics_service
+    if _analytics_service is None:
+        _analytics_service = AnalyticsService()
+    return _analytics_service

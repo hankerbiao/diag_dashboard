@@ -7,6 +7,7 @@ import ResultBadge, { isFailureStatus } from '../common/ResultBadge';
 interface ErrorTableProps {
   data: ErrorLogRow[];
   loading: boolean;
+  emptyHint?: string;
   analyzingId: string | null;
   analysisResult: Record<string, DiagnosisCache>;
   onAnalyze: (id: string) => void;
@@ -25,7 +26,7 @@ function translateDecision(decision: string): string {
   return DECISION_MAP[lower] || decision || '-';
 }
 
-export default function ErrorTable({ data, loading, analyzingId, analysisResult, onAnalyze, logBaseUrl = '' }: ErrorTableProps) {
+export default function ErrorTable({ data, loading, emptyHint, analyzingId, analysisResult, onAnalyze, logBaseUrl = '' }: ErrorTableProps) {
   const [sortField, setSortField] = useState<SortField>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
@@ -62,9 +63,9 @@ export default function ErrorTable({ data, loading, analyzingId, analysisResult,
 
   if (data.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-3" style={{ color: 'var(--color-text-secondary)' }}>
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center" style={{ color: 'var(--color-text-secondary)' }}>
         <Info className="w-8 h-8 opacity-40" />
-        <span className="text-sm">暂无测试详情数据</span>
+        <span className="text-sm">{emptyHint || '暂无测试详情数据'}</span>
       </div>
     );
   }

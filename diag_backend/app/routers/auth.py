@@ -1,15 +1,14 @@
 """
 认证 API - 注册/登录
 """
-from datetime import datetime, timedelta
+from datetime import timedelta
 
-from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from ..core.utils import utc_now_iso
 from ..models.auth import LoginRequest, RegisterRequest, AuthResponse, UserResponse
 from ..core.auth import hash_password, verify_password, create_access_token, get_current_user
 from ..core.mongodb import get_collection
-from ..core.config import get_settings
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 
@@ -31,7 +30,7 @@ async def register(request: RegisterRequest):
     user_doc = {
         "email": request.email,
         "password_hash": hash_password(request.password),
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": utc_now_iso(),
     }
     result = await col.insert_one(user_doc)
 

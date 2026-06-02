@@ -1,10 +1,13 @@
 """
 MongoDB 连接管理模块
 """
+import logging
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from typing import Optional
 
 from .config import get_settings
+
+logger = logging.getLogger(__name__)
 
 _client: Optional[AsyncIOMotorClient] = None
 _database: Optional[AsyncIOMotorDatabase] = None
@@ -16,13 +19,11 @@ async def connect_mongodb():
     settings = get_settings()
     _client = AsyncIOMotorClient(settings.mongodb_uri)
     _database = _client[settings.mongodb_db_name]
-    # 验证连接
     await _client.admin.command("ping")
-    # 自动创建索引和种子数据
     from .mongodb_indexes import ensure_indexes, seed_default_data
     await ensure_indexes(_database)
     await seed_default_data(_database)
-    print(f"Connected to MongoDB: {settings.mongodb_uri}/{settings.mongodb_db_name}")
+    logger.info("Connected to MongoDB: %s/%s", settings.mongodb_uri, settings.mongodb_db_name)
 
 
 async def close_mongodb():
@@ -32,7 +33,7 @@ async def close_mongodb():
         _client.close()
         _client = None
         _database = None
-        print("MongoDB connection closed")
+        logger.info("MongoDB connection closed")
 
 
 def get_database() -> AsyncIOMotorDatabase:

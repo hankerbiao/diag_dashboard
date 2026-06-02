@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends
 
 from ..core.auth import get_current_user
 from ..core.factory_config import load_factories_from_yaml
-from ..models.response import ApiResponse
+from ..models.api import ApiResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/factories", tags=["厂区管理"])

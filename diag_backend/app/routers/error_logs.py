@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, Query
-from typing import Optional
-from ..models.response import ApiResponse
+from ..models.api import ApiResponse
 from ..core.auth import get_current_user
 from ..services.error_logs_service import get_error_logs_service
 

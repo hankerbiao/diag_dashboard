@@ -15,7 +15,9 @@ export interface DiagnosisResult {
   preventive_measures: string[];
   reference_logs: Array<{ id: string; source: string; timestamp: string; content: string }>;
   maintenance_history: Array<{ id: string; date: string; component: string; action: string }>;
-  test_logs: TestLogItem[]; similar_cases: SimilarCaseItem[];
+  test_logs: TestLogItem[];
+  failed_test_logs?: TestLogItem[];
+  similar_cases: SimilarCaseItem[];
 }
 
 export interface SnHistoryItem {

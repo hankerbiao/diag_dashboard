@@ -5,7 +5,7 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from ..core.utils import utc_now, utc_now_iso
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,8 +13,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from ..core.auth import get_current_user
 from ..core.mongodb import get_collection
 from ..models.request import AutoSyncConfigUpdateRequest
-from ..models.response import ApiResponse
+from ..models.api import ApiResponse
 from ..services.sync_service import get_sync_service
+from ..services.mes_direct_service import MESDirectService
 from ..services.sync_scheduler_service import get_sync_scheduler_service, execute_sync_script
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -51,7 +52,7 @@ async def trigger_sync(
                 "factory_id": factory or "all",
                 "sync_type": "sims",
                 "status": "running",
-                "started_at": datetime.now(timezone.utc).isoformat(),
+                "started_at": utc_now_iso(),
                 "triggered_by": current_user.get("email", current_user["id"]),
             }
             result = await col.insert_one(job)
@@ -61,7 +62,7 @@ async def trigger_sync(
             async def _run_and_track():
                 status = await execute_sync_script(cmd, job_id)
                 if status == "completed":
-                    now = datetime.now(timezone.utc)
+                    now = utc_now()
                     if factory:
                         await get_collection("auto_sync_configs").update_one(
                             {"factory_id": factory},
@@ -94,16 +95,29 @@ async def get_servers(
     limit: int = Query(20, ge=1, le=100, description="每页数量"),
     current_user: dict = Depends(get_current_user)
 ):
-    """查询服务器列表，可按厂区过滤"""
-    svc = get_sync_service()
-    result = await svc.get_servers(
-        factory_id=factory_id,
-        search_sn=search_sn,
-        search_product_models=search_product_models,
-        page=page,
-        limit=limit
-    )
-    return ApiResponse(success=True, data=result)
+    """查询服务器列表（实时从 MES API 获取）"""
+    if not factory_id:
+        return ApiResponse(
+            success=True,
+            data={"items": [], "total": 0, "page": page, "limit": limit},
+            message="请选择厂区后查询",
+        )
+
+    try:
+        async with MESDirectService() as mes:
+            result = await mes.search_servers(
+                factory_id=factory_id,
+                sn=search_sn or "",
+                product_models=search_product_models or "",
+                page=page,
+                limit=limit,
+            )
+        return ApiResponse(success=True, data=result)
+    except ValueError as e:
+        return ApiResponse(success=False, error=str(e))
+    except Exception as e:
+        logger.exception("MES 服务器查询失败")
+        return ApiResponse(success=False, error=f"MES API 查询失败: {e}")
 
 
 @router.get("/servers/{server_sn}/test-details")
@@ -114,15 +128,27 @@ async def get_test_details(
     limit: int = Query(20, ge=1, le=500, description="每页数量"),
     current_user: dict = Depends(get_current_user)
 ):
-    """查询某服务器的测试详情"""
-    svc = get_sync_service()
-    result = await svc.get_test_details(
-        server_sn=server_sn,
-        factory_id=factory_id,
-        page=page,
-        limit=limit
-    )
-    return ApiResponse(success=True, data=result)
+    """查询某服务器的测试详情（实时从 MES API 获取，支持分页）"""
+    if not factory_id:
+        return ApiResponse(success=False, error="必须指定 factory_id 参数")
+
+    try:
+        offset = (page - 1) * limit
+        async with MESDirectService() as mes:
+            result = await mes.get_test_details(
+                factory_id, server_sn, offset=offset, limit=limit,
+            )
+        return ApiResponse(success=True, data={
+            "items": result["items"],
+            "total": result["total"],
+            "page": page,
+            "limit": limit,
+        })
+    except ValueError as e:
+        return ApiResponse(success=False, error=str(e))
+    except Exception as e:
+        logger.exception("MES 测试详情查询失败")
+        return ApiResponse(success=False, error=f"MES API 查询失败: {e}")
 
 
 @router.get("/jobs/{job_id}", response_model=ApiResponse)

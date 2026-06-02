@@ -230,7 +230,7 @@ class LLMService:
 - 厂区: {device_info.get('factory', '未知')}
 
 ## 三、全部测试日志（含通过项，用于全面了解设备状态）
-{chr(10).join([f"- [{l.get('test_time')}] {l.get('test_item')}: {l.get('fail_details', '通过')}" for l in test_logs[:10]])}
+{chr(10).join([f"- [{tl.get('test_time')}] {tl.get('test_item')}: {tl.get('fail_details', '通过')}" for tl in test_logs[:10]])}
 
 ## 四、历史维修记录
 {chr(10).join([f"- [{r.get('date')}] 更换 {r.get('component')}：{r.get('action')}" for r in maintenance[:5]]) if maintenance else "无历史维修记录"}

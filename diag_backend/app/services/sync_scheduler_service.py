@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
+from ..core.utils import utc_now, utc_now_iso
 from typing import Dict, List, Optional
 
 from bson import ObjectId
@@ -75,7 +76,7 @@ async def execute_sync_script(cmd: List[str], job_id: str) -> str:
         {"_id": ObjectId(job_id)},
         {"$set": {
             "status": status,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": utc_now_iso(),
             "progress": output,
             "output": output,
             "error": stderr_text,
@@ -118,7 +119,7 @@ class SyncSchedulerService:
         result = await col.insert_one({
             "factory_id": factory_id, "sync_type": "sims", "status": "running",
             "triggered_by": "scheduler",
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": utc_now_iso(),
         })
         job_id = str(result.inserted_id)
         cmd = ["python", f"{_SCRIPTS_DIR}/sync_data.py", "--factory", factory_id,
@@ -128,7 +129,7 @@ class SyncSchedulerService:
             if await execute_sync_script(cmd, job_id) == "completed":
                 await get_collection("auto_sync_configs").update_one(
                     {"factory_id": factory_id},
-                    {"$set": {"last_run_at": datetime.now(timezone.utc)}},
+                    {"$set": {"last_run_at": utc_now()}},
                 )
 
         self._running_jobs[key] = asyncio.create_task(_execute())
@@ -143,7 +144,7 @@ class SyncSchedulerService:
         result = await col.insert_one({
             "factory_id": MES_CONFIG_KEY, "sync_type": "mes", "status": "running",
             "triggered_by": "scheduler",
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": utc_now_iso(),
         })
         job_id = str(result.inserted_id)
         cmd = ["python", f"{_SCRIPTS_DIR}/sync_mes.py", "--sync-recent", "1"]
@@ -152,7 +153,7 @@ class SyncSchedulerService:
             if await execute_sync_script(cmd, job_id) == "completed":
                 await get_collection("auto_sync_configs").update_one(
                     {"factory_id": MES_CONFIG_KEY},
-                    {"$set": {"last_run_at": datetime.now(timezone.utc)}},
+                    {"$set": {"last_run_at": utc_now()}},
                 )
 
         self._running_jobs[key] = asyncio.create_task(_execute())
@@ -174,7 +175,7 @@ class SyncSchedulerService:
 
             try:
                 configs = await self._load_sims_configs()
-                now = datetime.now(timezone.utc)
+                now = utc_now()
                 for cfg in configs:
                     if not cfg.get("enabled"):
                         continue
@@ -205,7 +206,7 @@ class SyncSchedulerService:
                 if not cfg.get("enabled"):
                     continue
                 interval = cfg.get("interval_minutes", 1440)
-                now = datetime.now(timezone.utc)
+                now = utc_now()
                 last_run = _parse_iso(cfg.get("last_run_at"))
                 if last_run is None or (now - last_run).total_seconds() >= interval * 60:
                     asyncio.create_task(self._run_mes_sync())
@@ -254,7 +255,7 @@ class SyncSchedulerService:
 
     async def update_config(self, request) -> dict:
         col = get_collection("auto_sync_configs")
-        now = datetime.now(timezone.utc)
+        now = utc_now()
 
         sims_enabled = getattr(request, "sims_enabled", None)
         sims_interval = getattr(request, "sims_interval_minutes", None)

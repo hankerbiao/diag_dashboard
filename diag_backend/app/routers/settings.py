@@ -1,12 +1,12 @@
 """
 全局 AI 配置 API
 """
-from datetime import datetime, timezone
+from ..core.utils import utc_now_iso
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..models.request import GlobalAiConfigUpdateRequest
-from ..models.response import ApiResponse
+from ..models.api import ApiResponse
 from ..core.auth import get_current_user
 from ..core.mongodb import get_collection
 
@@ -82,7 +82,7 @@ async def update_global_ai_config(
             update_data["provider"] = request.provider
 
         update_data["updated_by"] = current_user["id"]
-        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        update_data["updated_at"] = utc_now_iso()
 
         await col.update_one(
             {"_id": "ai_config"},

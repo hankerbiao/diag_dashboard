@@ -3,7 +3,8 @@ Error Logs Service - 从 sync_remote_test_details 聚合异常日志统计
 替代原有的 Mock 数据
 """
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
+from ..core.utils import utc_now
 from typing import Optional
 
 from ..core.mongodb import get_collection
@@ -22,7 +23,7 @@ class ErrorLogsService:
     ) -> dict:
         """获取异常统计数据（趋势、直通率、问题类型、线体分布）"""
         days = {"day": 7, "week": 28, "month": 90}.get(time_range, 7)
-        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        since = (utc_now() - timedelta(days=days)).isoformat()
 
         match_filter: dict = {"test_time": {"$gte": since}}
         if factory:
@@ -48,7 +49,7 @@ class ErrorLogsService:
     ) -> list[dict]:
         """获取阻断历史趋势"""
         days = {"day": 7, "week": 28, "month": 90}.get(time_range, 7)
-        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        since = (utc_now() - timedelta(days=days)).isoformat()
 
         match_filter: dict = {"test_time": {"$gte": since}}
         if factory:
@@ -62,7 +63,7 @@ class ErrorLogsService:
         factory: str,
     ) -> list[dict]:
         """获取直通率趋势（近 7 天）"""
-        since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        since = (utc_now() - timedelta(days=7)).isoformat()
 
         match_filter: dict = {"test_time": {"$gte": since}}
         if factory:

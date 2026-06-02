@@ -1,19 +1,18 @@
 import { CheckCircle2, XCircle } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { isTestFailed, isTestPassed } from '../../utils/testStatus';
 
 interface ResultBadgeProps {
   status: string;
   icon?: ReactNode;
 }
 
-function isSuccessStatus(status: string): boolean {
-  const lower = (status ?? '').toLowerCase();
-  return ['成功', 'pass', 'passed', 'ok'].some((k) => lower.includes(k));
+export function isSuccessStatus(status: string): boolean {
+  return isTestPassed(status);
 }
 
 export function isFailureStatus(status: string): boolean {
-  const lower = (status ?? '').toLowerCase();
-  return ['失败', 'fail', 'failed', 'ng', 'error'].some((k) => lower.includes(k));
+  return isTestFailed(status);
 }
 
 /**

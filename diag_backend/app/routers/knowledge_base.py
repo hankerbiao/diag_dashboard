@@ -8,7 +8,8 @@ from ..core.config import get_settings
 from ..core.mongodb import get_collection
 from ..core.utils import utc_now_iso, parse_object_id
 from ..models.request import KnowledgeBaseSearchRequest, KnowledgeDocUpdateRequest
-from ..models.response import ApiResponse, KnowledgeDocResponse
+from ..models.api import ApiResponse
+from ..models.knowledge import KnowledgeDocResponse
 from ..services import ragflow_service
 
 ALLOWED_FORMATS = {"pdf", "docx", "md", "txt", "pptx", "xlsx", "csv", "html", "json", "xml"}

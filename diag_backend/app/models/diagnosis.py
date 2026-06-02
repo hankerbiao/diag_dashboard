@@ -1,5 +1,6 @@
+"""诊断相关响应模型"""
 from pydantic import BaseModel
-from typing import Optional, Any
+from typing import Optional
 from datetime import datetime
 
 
@@ -60,6 +61,7 @@ class DiagnosisResponse(BaseModel):
     reference_logs: list[ReferenceLog]
     maintenance_history: list[MaintenanceRecord]
     test_logs: list[TestLogItem] = []
+    failed_test_logs: list[TestLogItem] = []
     similar_cases: list[SimilarCaseItem] = []
 
 
@@ -98,34 +100,6 @@ class ErrorLogsStatsResponse(BaseModel):
     by_line: list[LineIssuesData]
 
 
-class GlobalAiConfigResponse(BaseModel):
-    api_key: str
-    base_url: str
-    model: str
-    temperature: float
-    provider: str
-    updated_at: str
-    updated_by: str
-
-
-class ApiResponse(BaseModel):
-    success: bool
-    data: Optional[Any] = None
-    error: Optional[str] = None
-    message: Optional[str] = None
-
-
-class KnowledgeDocResponse(BaseModel):
-    id: str
-    title: str
-    description: str = ""
-    format: str = ""
-    size_bytes: int = 0
-    status: str = "ready"
-    tags: list[str] = []
-    uploaded_at: Optional[str] = None
-
-
 class DiagnosisCacheResponse(BaseModel):
     id: str
     error_log_id: str
@@ -139,13 +113,6 @@ class DiagnosisCacheResponse(BaseModel):
     log_content: str = ""
     created_at: str
     is_cached: bool = False
-
-
-class PaginatedResponse(BaseModel):
-    items: list
-    total: int
-    page: int
-    limit: int
 
 
 class SnHistoryItem(BaseModel):
@@ -166,5 +133,3 @@ class SnHistoryDetail(BaseModel):
     chat_messages: list[dict] = []
     created_at: str
     updated_at: str
-
-

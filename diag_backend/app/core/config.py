@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     ragflow_api_key: str = ""
     ragflow_default_dataset: str = "weaveeye-knowledge-base"
 
+    # MES API
+    mes_request_timeout: int = 30  # MES 实时查询超时秒数
+
     # Logging
     log_level: str = "INFO"  # DEBUG/INFO/WARNING/ERROR
     log_format: str = "console"  # console/json

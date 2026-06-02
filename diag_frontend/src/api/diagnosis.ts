@@ -11,17 +11,30 @@ interface SSECallbacks<T> {
   onToken?: (text: string) => void;
 }
 
+async function parseHttpError(resp: Response): Promise<string> {
+  try {
+    const body = await resp.json();
+    if (body?.error) return String(body.error);
+    if (body?.message) return String(body.message);
+  } catch { /* ignore */ }
+  return `请求失败: ${resp.status}`;
+}
+
 async function consumeSSE<T>(resp: Response, callbacks: SSECallbacks<T>, signal?: AbortSignal): Promise<void> {
-  if (!resp.ok || !resp.body) { callbacks.onError(`请求失败: ${resp.status}`); return; }
+  if (!resp.ok || !resp.body) {
+    callbacks.onError(await parseHttpError(resp));
+    return;
+  }
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let finished = false;
   const { onProgress, onComplete, onError, onToken } = callbacks;
   signal?.addEventListener('abort', () => reader.cancel());
 
   try {
     while (true) {
-      if (signal?.aborted) { callbacks.onError('请求已取消'); break; }
+      if (signal?.aborted) { onError('请求已取消'); return; }
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -36,14 +49,22 @@ async function consumeSSE<T>(resp: Response, callbacks: SSECallbacks<T>, signal?
             if (currentEvent === 'progress') onProgress(data.stage, data.detail);
             else if (currentEvent === 'token') onToken?.(data.text);
             else if (currentEvent === 'done') {
+              finished = true;
               if (data.success && data.data) onComplete(data.data);
               else onError(data.message || '分析失败');
-            } else if (currentEvent === 'error') onError(data.message || '未知错误');
+            } else if (currentEvent === 'error') {
+              finished = true;
+              onError(data.message || '未知错误');
+            }
           } catch { /* skip malformed */ }
         }
       }
     }
-  } catch (e) { onError(e instanceof Error ? e.message : '网络连接中断'); }
+    if (!finished) onError('连接意外结束，请重试');
+  } catch (e) {
+    if (signal?.aborted) onError('请求已取消');
+    else onError(e instanceof Error ? e.message : '网络连接中断');
+  }
 }
 
 export const diagnosisApi = {
@@ -76,19 +97,36 @@ export const diagnosisApi = {
       method: 'POST', body: JSON.stringify({ sn, factory }),
     });
   },
-  async diagnoseBySNSse(sn: string, factory: string,
-    onProgress: SSECallbacks<DiagnosisResult>['onProgress'], onComplete: SSECallbacks<DiagnosisResult>['onComplete'],
-    onError: SSECallbacks<DiagnosisResult>['onError'], onToken?: SSECallbacks<DiagnosisResult>['onToken']): Promise<AbortController> {
+  diagnoseBySNSse(
+    sn: string,
+    factory: string,
+    onProgress: SSECallbacks<DiagnosisResult>['onProgress'],
+    onComplete: SSECallbacks<DiagnosisResult>['onComplete'],
+    onError: SSECallbacks<DiagnosisResult>['onError'],
+    onToken?: SSECallbacks<DiagnosisResult>['onToken'],
+  ): AbortController {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 600_000);
-    try {
-      const token = getAccessToken();
-      const resp = await fetch(`${API_BASE_URL}/api/diagnosis/sn/analyze`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ sn, factory }), signal: controller.signal,
-      });
-      await consumeSSE(resp, { onProgress, onComplete, onError, onToken }, controller.signal);
-    } finally { clearTimeout(timeoutId); }
+
+    (async () => {
+      try {
+        const token = getAccessToken();
+        const resp = await fetch(`${API_BASE_URL}/api/diagnosis/sn/analyze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ sn, factory }),
+          signal: controller.signal,
+        });
+        await consumeSSE(resp, { onProgress, onComplete, onError, onToken }, controller.signal);
+      } catch (e) {
+        if (!controller.signal.aborted) {
+          onError(e instanceof Error ? e.message : '网络连接中断');
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    })();
+
     return controller;
   },
   async reAnalyzeErrorLog(errorLogId: string, logBaseUrl?: string) {
@@ -100,7 +138,7 @@ export const diagnosisApi = {
       method: 'POST', body: JSON.stringify({ sn, factory, diagnosis_result: diagnosisResult }),
     });
   },
-  async appendChatMessage(historyId: string, role: string, content: string) {
+  async appendChatMessage(historyId: string, role: 'user' | 'assistant', content: string) {
     return fetchApi<void>(`/api/diagnosis/sn/history/${historyId}/chat`, {
       method: 'PUT', body: JSON.stringify({ role, content }),
     });

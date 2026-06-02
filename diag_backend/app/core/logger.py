@@ -15,10 +15,10 @@ import sys
 import json
 import uuid
 from logging.handlers import RotatingFileHandler
-from datetime import datetime, timezone
 from typing import Any
 
 from .config import get_settings
+from .utils import utc_now_iso
 
 # 全局上下文变量
 _log_context: dict[str, Any] = {}
@@ -66,7 +66,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         log_data = {
-            "time": datetime.now(timezone.utc).isoformat(),
+            "time": utc_now_iso(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),

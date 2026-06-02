@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from ..core.auth import get_current_user
-from ..models.response import ApiResponse
+from ..models.api import ApiResponse
 from ..services.analytics_service import get_analytics_service
 
 logger = logging.getLogger(__name__)

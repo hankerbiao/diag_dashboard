@@ -30,6 +30,7 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
   const [selectedServer, setSelectedServer] = useState<SyncServer | null>(null);
   const [detailRows, setDetailRows] = useState<ErrorLogRow[]>([]);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState('');
   const [showDetailModal, setShowDetailModal] = useState(false);
 
   const currentFactory = factorySites.find(f => f.factory_id === factory);
@@ -136,20 +137,31 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
     setSelectedSn(null);
     setSelectedServer(null);
     setDetailRows([]);
+    setDetailsError('');
     setShowDetailModal(false);
     loadInsights();
   };
 
   const fetchDetails = useCallback(async (server: SyncServer) => {
+    if (!factory) {
+      setDetailsError('请先在右上角选择厂区');
+      return;
+    }
     setSelectedSn(server.server_sn);
     setSelectedServer(server);
     setShowDetailModal(true);
     setDetailsLoading(true);
+    setDetailsError('');
+    setDetailRows([]);
     try {
-      const res = await syncApi.getTestDetails(server.server_sn, { page: 1, limit: 500 });
+      const res = await syncApi.getTestDetails(server.server_sn, {
+        factory_id: factory,
+        page: 1,
+        limit: 500,
+      });
       if (res.success && res.data) {
-        const rows: ErrorLogRow[] = res.data.items.map((d) => ({
-          id: d.id,
+        const rows: ErrorLogRow[] = res.data.items.map((d, idx) => ({
+          id: d.id || `${factory}_${d.server_sn}_${d.test_time}_${idx}`,
           sn: d.server_sn,
           testItem: d.detailed_flow || d.big_flow || '-',
           testTime: d.test_time,
@@ -160,13 +172,20 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
           mesRecord: d.mes_record || '',
         }));
         setDetailRows(rows);
+        if (rows.length === 0) {
+          setDetailsError('SIMS 未返回该服务器的测试记录');
+        }
       } else {
         setDetailRows([]);
+        setDetailsError(res.error || '加载测试详情失败');
       }
+    } catch {
+      setDetailRows([]);
+      setDetailsError('网络请求失败，请稍后重试');
     } finally {
       setDetailsLoading(false);
     }
-  }, []);
+  }, [factory]);
 
   const handleAnalyze = async (id: string) => {
     setSelectedLogId(id);
@@ -339,6 +358,7 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
           server={selectedServer}
           detailRows={detailRows}
           detailsLoading={detailsLoading}
+          detailsError={detailsError}
           analyzingId={analyzingId}
           analysisResult={analysisResult}
           onAnalyze={handleAnalyze}

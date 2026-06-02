@@ -8,6 +8,7 @@ interface ServerDetailModalProps {
   server: SyncServer;
   detailRows: ErrorLogRow[];
   detailsLoading: boolean;
+  detailsError?: string;
   analyzingId: string | null;
   analysisResult: Record<string, DiagnosisCache>;
   onAnalyze: (id: string) => void;
@@ -27,6 +28,7 @@ export default function ServerDetailModal({
   server,
   detailRows,
   detailsLoading,
+  detailsError = '',
   analyzingId,
   analysisResult,
   onAnalyze,
@@ -161,6 +163,7 @@ export default function ServerDetailModal({
             <ErrorTable
               data={filteredRows}
               loading={detailsLoading}
+              emptyHint={detailsError || undefined}
               analyzingId={analyzingId}
               analysisResult={analysisResult}
               onAnalyze={onAnalyze}

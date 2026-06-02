@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from 'react';
+import { useState, useEffect, useRef, type KeyboardEvent } from 'react';
 import { ChevronUp, Loader2, Bot, User } from 'lucide-react';
 
 export interface ChatMessage { role: 'user' | 'assistant'; content: string }
@@ -11,6 +11,11 @@ interface DiagnosisChatProps {
 
 export default function DiagnosisChat({ messages, loading, onSend }: DiagnosisChatProps) {
   const [input, setInput] = useState('');
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, loading]);
 
   const handleSend = () => {
     const q = input.trim();
@@ -83,6 +88,7 @@ export default function DiagnosisChat({ messages, loading, onSend }: DiagnosisCh
             </div>
           </div>
         )}
+        <div ref={bottomRef} />
       </div>
 
       <div className="p-3 border-t shrink-0 flex items-center gap-2" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-secondary)' }}>

@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { Bot, Activity, AlertTriangle, Wrench, Terminal, ChevronDown, ChevronRight, Loader2, Cpu, Shield } from 'lucide-react';
+import { Bot, Activity, AlertTriangle, Wrench, Terminal, ChevronDown, ChevronRight, Loader2, Cpu, Shield, History, BookOpen } from 'lucide-react';
 import type { DiagnosisResult as DiagnosisResultType, TestLogItem } from '../../api/fastapi';
 import { diagnosisApi } from '../../api/fastapi';
+import ResultBadge from '../common/ResultBadge';
+import { collectFailedTestLogs, isSimsLogFailed } from '../../utils/testStatus';
 
 interface DiagnosisResultProps {
   result: DiagnosisResultType;
@@ -21,11 +23,6 @@ function getCategoryStyle(category: string) {
   const cat = category.toLowerCase();
   if (cat.includes('hardware') || cat.includes('硬件')) return CATEGORY_COLORS.hardware;
   return CATEGORY_COLORS.hardware;
-}
-
-function isFailedLog(log: TestLogItem): boolean {
-  const fd = log.fail_details.toUpperCase();
-  return fd !== '' && fd !== 'PASS' && fd !== 'OK' && !fd.includes('通过');
 }
 
 function RawLogRow({ log, factory, sn }: { log: TestLogItem; factory: string; sn: string; key?: string }) {
@@ -60,12 +57,7 @@ function RawLogRow({ log, factory, sn }: { log: TestLogItem; factory: string; sn
         </button>
         <span className="text-[12px] font-mono" style={{ color: 'var(--color-text-muted)' }}>{log.test_time}</span>
         <span className="text-[12px] font-medium truncate flex-1" style={{ color: 'var(--color-text-primary)' }}>{log.test_item}</span>
-        <span
-          className="text-[11px] font-bold px-1.5 py-0.5 rounded"
-          style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#dc2626' }}
-        >
-          {log.fail_details || 'FAIL'}
-        </span>
+        <ResultBadge status={log.fail_details || '-'} />
       </div>
       {expanded && (
         <div className="px-5 py-3 space-y-2 text-[12px] font-mono" style={{ color: 'var(--color-text-secondary)' }}>
@@ -112,7 +104,8 @@ function RawLogRow({ log, factory, sn }: { log: TestLogItem; factory: string; sn
 
 export default function DiagnosisResult({ result, factory }: DiagnosisResultProps) {
   const catStyle = getCategoryStyle(result.category);
-  const failedLogs = result.test_logs.filter(isFailedLog);
+  const failedLogs = collectFailedTestLogs(result);
+  const recentLogs = result.test_logs ?? [];
 
   return (
     <div
@@ -153,7 +146,49 @@ export default function DiagnosisResult({ result, factory }: DiagnosisResultProp
                 {result.sn}
               </strong>{' '}
               的图谱推理分析已完成。系统已交叉比对 SIMS 测试日志与历史维修记录，并调用了相应的故障知识经验库。
+              {failedLogs.length > 0 && (
+                <span className="block mt-2 font-medium" style={{ color: '#dc2626' }}>
+                  共识别 {failedLogs.length} 条 SIMS 失败测试项，已纳入下方分析与日志原文。
+                </span>
+              )}
             </div>
+
+            {failedLogs.length > 0 && (
+              <div className="space-y-3">
+                <h3
+                  className="text-xs font-bold uppercase tracking-widest flex items-center gap-2"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  <AlertTriangle className="w-4 h-4 text-red-500" />
+                  SIMS 失败测试项（{failedLogs.length}）
+                </h3>
+                <div
+                  className="rounded-xl border overflow-hidden shadow-sm"
+                  style={{ borderColor: 'rgba(239,68,68,0.25)', backgroundColor: 'var(--color-bg-primary)' }}
+                >
+                  {failedLogs.map((log) => (
+                    <div
+                      key={log.id}
+                      className="flex items-center gap-3 px-4 py-2.5 border-b last:border-b-0 text-[12px]"
+                      style={{ borderColor: 'var(--color-border)' }}
+                    >
+                      <span className="font-mono shrink-0" style={{ color: 'var(--color-text-muted)' }}>
+                        {log.test_time}
+                      </span>
+                      <span className="font-medium flex-1 truncate" style={{ color: 'var(--color-text-primary)' }}>
+                        {log.test_item}
+                      </span>
+                      <ResultBadge status={log.fail_details || '-'} />
+                      {(log.fault_type1 || log.fault_type2 || log.fault_type3) && (
+                        <span className="hidden sm:inline text-[11px] truncate max-w-[140px]" style={{ color: '#dc2626' }}>
+                          {[log.fault_type1, log.fault_type2, log.fault_type3].filter(Boolean).join(' / ')}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {result.summary && (
               <div className="space-y-3">
@@ -292,14 +327,64 @@ export default function DiagnosisResult({ result, factory }: DiagnosisResultProp
               </div>
             )}
 
-            {/* 错误日志原文 */}
+            {result.maintenance_history.length > 0 && (
+              <div className="space-y-3 pt-2">
+                <h3
+                  className="text-xs font-bold uppercase tracking-widest flex items-center gap-2"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  <History className="w-4 h-4 text-slate-400" /> 历史维修记录
+                </h3>
+                <ul className="space-y-2">
+                  {result.maintenance_history.map((item) => (
+                    <li
+                      key={item.id || `${item.date}-${item.component}`}
+                      className="text-[13px] p-3 rounded-xl border"
+                      style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }}
+                    >
+                      <span className="font-mono text-[11px]" style={{ color: 'var(--color-text-muted)' }}>{item.date}</span>
+                      <span className="mx-2">·</span>
+                      <span className="font-medium" style={{ color: 'var(--color-text-primary)' }}>{item.component}</span>
+                      <span className="mx-2">—</span>
+                      <span>{item.action}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {result.similar_cases.length > 0 && (
+              <div className="space-y-3 pt-2">
+                <h3
+                  className="text-xs font-bold uppercase tracking-widest flex items-center gap-2"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  <BookOpen className="w-4 h-4 text-violet-400" /> 相似历史案例
+                </h3>
+                <ul className="space-y-2">
+                  {result.similar_cases.map((item) => (
+                    <li
+                      key={item.id || item.title}
+                      className="text-[13px] p-3 rounded-xl border"
+                      style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
+                    >
+                      <div className="font-medium" style={{ color: 'var(--color-text-primary)' }}>{item.title || item.root_cause}</div>
+                      {item.root_cause && item.title && (
+                        <div className="mt-1 text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>{item.root_cause}</div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {failedLogs.length > 0 && (
               <div className="space-y-3 pt-2">
                 <h3
                   className="text-xs font-bold uppercase tracking-widest flex items-center gap-2"
                   style={{ color: 'var(--color-text-secondary)' }}
                 >
-                  <Terminal className="w-4 h-4 text-red-400" /> 错误日志原文（{failedLogs.length} 条失败用例）
+                  <Terminal className="w-4 h-4 text-red-400" /> 失败项日志详情（可下载原文）
                 </h3>
                 <div
                   className="rounded-xl border overflow-hidden shadow-sm"
@@ -307,6 +392,40 @@ export default function DiagnosisResult({ result, factory }: DiagnosisResultProp
                 >
                   {failedLogs.map((log) => (
                     <RawLogRow key={log.id} log={log} factory={factory} sn={result.sn} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {recentLogs.length > 0 && (
+              <div className="space-y-3 pt-2">
+                <h3
+                  className="text-xs font-bold uppercase tracking-widest flex items-center gap-2"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  <Terminal className="w-4 h-4 text-slate-400" /> SIMS 最近测试记录（{recentLogs.length}）
+                </h3>
+                <div
+                  className="rounded-xl border overflow-hidden shadow-sm"
+                  style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}
+                >
+                  {recentLogs.map((log) => (
+                    <div
+                      key={`recent-${log.id}`}
+                      className="flex items-center gap-3 px-4 py-2.5 border-b last:border-b-0 text-[12px]"
+                      style={{
+                        borderColor: 'var(--color-border)',
+                        backgroundColor: isSimsLogFailed(log) ? 'rgba(239,68,68,0.04)' : 'transparent',
+                      }}
+                    >
+                      <span className="font-mono shrink-0" style={{ color: 'var(--color-text-muted)' }}>
+                        {log.test_time}
+                      </span>
+                      <span className="font-medium flex-1 truncate" style={{ color: 'var(--color-text-primary)' }}>
+                        {log.test_item}
+                      </span>
+                      <ResultBadge status={log.fail_details || log.decision || '-'} />
+                    </div>
                   ))}
                 </div>
               </div>

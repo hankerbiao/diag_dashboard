@@ -1,11 +1,14 @@
 """
 知识图谱检索服务
 """
+import logging
 from typing import Optional
 
 from bson import ObjectId
 
 from ..core.mongodb import get_collection
+
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeGraphService:
@@ -28,8 +31,11 @@ class KnowledgeGraphService:
             query["error_code"] = error_code
 
         # 模糊匹配 root_cause
-        if error_description:
-            query["$text"] = {"$search": error_description}
+        if error_description and error_description.strip():
+            query["$text"] = {"$search": error_description.strip()}
+
+        if not query:
+            return []
 
         cursor = col.find(query).limit(limit)
         cases = await cursor.to_list(length=limit)
@@ -78,7 +84,7 @@ class KnowledgeGraphService:
     ) -> list[dict]:
         """获取设备维修历史"""
         try:
-            oid = ObjectId(device_id)
+            ObjectId(device_id)
         except Exception:
             return []
 

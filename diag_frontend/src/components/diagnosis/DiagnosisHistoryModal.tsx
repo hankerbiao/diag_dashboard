@@ -1,5 +1,10 @@
 import { Clock } from 'lucide-react';
-import type { SnHistoryItem as SnHistoryItemType } from '../../api/fastapi';
+import type { FactorySite, SnHistoryItem as SnHistoryItemType } from '../../api/fastapi';
+
+function factoryDisplayName(factoryId: string, sites: FactorySite[]): string {
+  if (!factoryId) return '—';
+  return sites.find((f) => f.factory_id === factoryId)?.name ?? factoryId;
+}
 
 function formatTime(iso: string): string {
   try {
@@ -10,12 +15,13 @@ function formatTime(iso: string): string {
 
 interface DiagnosisHistoryModalProps {
   items: SnHistoryItemType[];
+  factorySites: FactorySite[];
   activeId: string | null;
   onClose: () => void;
   onSelect: (item: SnHistoryItemType) => void;
 }
 
-export default function DiagnosisHistoryModal({ items, activeId, onClose, onSelect }: DiagnosisHistoryModalProps) {
+export default function DiagnosisHistoryModal({ items, factorySites, activeId, onClose, onSelect }: DiagnosisHistoryModalProps) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
@@ -23,7 +29,7 @@ export default function DiagnosisHistoryModal({ items, activeId, onClose, onSele
       onClick={onClose}
     >
       <div
-        className="rounded-2xl border shadow-2xl w-[640px] max-h-[70vh] flex flex-col overflow-hidden"
+        className="rounded-2xl border shadow-2xl w-[720px] max-h-[70vh] flex flex-col overflow-hidden"
         style={{ backgroundColor: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -46,8 +52,9 @@ export default function DiagnosisHistoryModal({ items, activeId, onClose, onSele
           <table className="w-full text-[13px]">
             <thead>
               <tr style={{ color: 'var(--color-text-muted)', backgroundColor: 'var(--color-bg-secondary)' }}>
-                <th className="text-left font-medium whitespace-nowrap px-5 py-3 w-[100px]">时间</th>
-                <th className="text-left font-medium whitespace-nowrap px-5 py-3 w-[160px]">SN</th>
+                <th className="text-left font-medium whitespace-nowrap px-5 py-3 w-[96px]">时间</th>
+                <th className="text-left font-medium whitespace-nowrap px-5 py-3 w-[88px]">厂区</th>
+                <th className="text-left font-medium whitespace-nowrap px-5 py-3 w-[140px]">SN</th>
                 <th className="text-left font-medium whitespace-nowrap px-5 py-3">故障类别</th>
                 <th className="text-right font-medium whitespace-nowrap px-5 py-3 w-[80px]">置信度</th>
               </tr>
@@ -67,6 +74,9 @@ export default function DiagnosisHistoryModal({ items, activeId, onClose, onSele
                 >
                   <td className="px-5 py-3 font-mono whitespace-nowrap text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>
                     {formatTime(item.created_at)}
+                  </td>
+                  <td className="px-5 py-3 text-[12px] whitespace-nowrap truncate max-w-[88px]" title={factoryDisplayName(item.factory, factorySites)}>
+                    {factoryDisplayName(item.factory, factorySites)}
                   </td>
                   <td className="px-5 py-3 font-mono text-[12px]">{item.sn}</td>
                   <td className="px-5 py-3 truncate max-w-[220px]">{item.category}</td>
