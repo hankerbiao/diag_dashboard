@@ -13,6 +13,17 @@ logger = logging.getLogger(__name__)
 SNAPSHOT_COLLECTION = "analytics_snapshots"
 
 
+async def _ensure_sync_server_sn_index(db: AsyncIOMotorDatabase) -> None:
+    """Ensure server_sn index is non-unique; only drop legacy unique index when needed."""
+    col = db["sync_remote_servers"]
+    indexes = await col.index_information()
+    existing = indexes.get("idx_sync_servers_sn")
+    if existing and existing.get("unique"):
+        logger.info("Migrating idx_sync_servers_sn: dropping legacy unique index")
+        await col.drop_index("idx_sync_servers_sn")
+    await col.create_index("server_sn", name="idx_sync_servers_sn")
+
+
 async def ensure_indexes(db: AsyncIOMotorDatabase):
     """确保所有集合的必要索引存在（幂等操作）"""
 
@@ -51,14 +62,7 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
     await db["sync_jobs"].create_index("started_at", name="idx_sync_jobs_started_at")
 
     # ---- sync_remote_servers ----
-    # 旧版 idx_sync_servers_sn 是 unique 索引（已废弃），删掉重建为非唯一
-    try:
-        await db["sync_remote_servers"].drop_index("idx_sync_servers_sn")
-    except Exception:
-        pass  # 首次部署时不存在
-    await db["sync_remote_servers"].create_index(
-        "server_sn", name="idx_sync_servers_sn"
-    )
+    await _ensure_sync_server_sn_index(db)
     await db["sync_remote_servers"].create_index(
         [("factory_id", 1), ("server_sn", 1)], unique=True, name="idx_sync_servers_factory_sn"
     )

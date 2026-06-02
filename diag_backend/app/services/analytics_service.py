@@ -4,6 +4,7 @@ import logging
 from datetime import timedelta
 from ..core.utils import utc_now
 from typing import Optional
+from pymongo.errors import OperationFailure
 from ..core.factory_config import load_factories_from_yaml
 from ..core.mongodb import get_collection
 
@@ -154,11 +155,20 @@ class AnalyticsService:
 
     @staticmethod
     async def _run(col, pipeline: list) -> list:
-        try:
-            return await col.aggregate(pipeline, allowDiskUse=True).to_list(length=1000)
-        except Exception as e:
-            logging.error("Aggregation failed: %s", e)
-            return []
+        for attempt in range(3):
+            try:
+                return await col.aggregate(pipeline, allowDiskUse=True).to_list(length=1000)
+            except OperationFailure as e:
+                # Index dropped/rebuilt during startup or reload (code 175 QueryPlanKilled)
+                if e.code == 175 and attempt < 2:
+                    await asyncio.sleep(0.5 * (2 ** attempt))
+                    continue
+                logging.error("Aggregation failed: %s", e)
+                return []
+            except Exception as e:
+                logging.error("Aggregation failed: %s", e)
+                return []
+        return []
 
     async def _loop(self):
         await self.refresh_all()
