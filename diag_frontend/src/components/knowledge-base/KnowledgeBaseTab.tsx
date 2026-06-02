@@ -1,11 +1,12 @@
 import { useState, useCallback, useEffect } from 'react';
 import {
   AlertCircle, Database, FileArchive, Search,
-  CheckCircle2, Clock, RefreshCw, Trash2, Cpu,
+  CheckCircle2, Clock, RefreshCw, Trash2, X, BookOpen,
 } from 'lucide-react';
 import { knowledgeBaseApi, KnowledgeDoc } from '../../api/fastapi';
 import UploadZone from './UploadZone';
 import DocDetailDrawer from './DocDetailDrawer';
+import SearchTest from './SearchTest';
 
 interface DocDisplay {
   id: string;
@@ -75,6 +76,7 @@ export default function KnowledgeBaseTab() {
   const [activeFilter, setActiveFilter] = useState('all');
   const [detailDoc, setDetailDoc] = useState<KnowledgeDoc | null>(null);
   const [chunkCount, setChunkCount] = useState(0);
+  const [showSearch, setShowSearch] = useState(false);
 
   const limit = 20;
 
@@ -189,7 +191,12 @@ export default function KnowledgeBaseTab() {
             上传常见格式的历史维修文档、SOP教程、机身图解及日志规范。所有文件将自动通过 OCR 与文档切分引擎处理，并向量化入库，部署于海光DCU服务器上作为大模型深度诊断参考。
           </p>
         </div>
-        <div className="flex shrink-0">
+        <div className="flex shrink-0 items-center gap-3">
+          <button onClick={() => setShowSearch(true)}
+            className="h-10 px-4 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors hover:brightness-95"
+            style={{ backgroundColor: 'var(--color-accent)', color: '#fff' }}>
+            <Search className="w-4 h-4" />知识库检索
+          </button>
           <div className="bg-emerald-50 border border-emerald-100 rounded-lg px-4 py-2 text-center shadow-sm">
             <div className="text-[11px] text-emerald-600 font-bold uppercase tracking-wider mb-0.5">有效知识切片</div>
             <div className="text-[15px] font-bold text-emerald-800">
@@ -401,6 +408,32 @@ export default function KnowledgeBaseTab() {
         onDeleted={handleDrawerDeleted}
         onUpdated={() => loadDocs(page)}
       />
+
+      {/* Search Modal */}
+      {showSearch && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setShowSearch(false)}>
+          <div className="rounded-2xl border shadow-2xl w-[680px] max-h-[85vh] flex flex-col overflow-hidden"
+            style={{ backgroundColor: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }}
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b shrink-0"
+              style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-secondary)' }}>
+              <div className="flex items-center gap-3">
+                <BookOpen className="w-5 h-5" style={{ color: 'var(--color-accent)' }} />
+                <h2 className="text-base font-bold" style={{ color: 'var(--color-text-primary)' }}>知识库检索</h2>
+                <span className="text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>验证已上传文档的查询效果</span>
+              </div>
+              <button onClick={() => setShowSearch(false)} className="w-7 h-7 rounded-lg flex items-center justify-center hover:opacity-70"
+                style={{ color: 'var(--color-text-muted)' }}>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto custom-scrollbar">
+              <SearchTest compact />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

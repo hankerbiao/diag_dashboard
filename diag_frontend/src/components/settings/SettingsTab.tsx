@@ -3,8 +3,6 @@ import { CheckCircle2, AlertCircle } from 'lucide-react';
 import ApiConfig from './ApiConfig';
 import type { ApiConfigHandle } from './ApiConfig';
 import SyncManagement from './SyncManagement';
-import SearchTest from '../knowledge-base/SearchTest';
-
 export default function SettingsTab() {
   const apiConfigRef = useRef<ApiConfigHandle>(null);
   const [saving, setSaving] = useState(false);
@@ -39,8 +37,6 @@ export default function SettingsTab() {
       <div className="w-full max-w-4xl space-y-8 pb-12">
         <SyncManagement />
         <ApiConfig ref={apiConfigRef} />
-
-        <SearchTest />
 
         {feedback && (
           <div
