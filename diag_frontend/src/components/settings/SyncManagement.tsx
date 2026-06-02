@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Loader2, AlertCircle, CheckCircle2, Database, HardDrive, RefreshCw } from 'lucide-react';
-import { syncApi, type AutoSyncConfig, type SyncJobItem } from '../../api/fastapi';
-import SyncProgressModal from './SyncProgressModal';
+import { syncApi, type AutoSyncConfig } from '../../api/fastapi';
 
 const formatTime = (iso: string | null) => {
   if (!iso) return '从未';
@@ -62,12 +61,6 @@ export default function SyncManagement() {
   const [syncingSims, setSyncingSims] = useState<Record<string, boolean>>({});
   const [syncingMes, setSyncingMes] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [recentJobs, setRecentJobs] = useState<SyncJobItem[]>([]);
-  const [jobsTotal, setJobsTotal] = useState(0);
-  const [jobsPage, setJobsPage] = useState(1);
-  const [jobsLimit] = useState(10);
-  const [progressJob, setProgressJob] = useState<{ jobId: string; factoryLabel: string } | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const showFeedback = useCallback((type: 'success' | 'error', message: string) => {
     setFeedback({ type, message });
@@ -77,50 +70,13 @@ export default function SyncManagement() {
   const fetchData = useCallback(async (showLoading = false) => {
     if (showLoading) { setLoading(true); setError(null); }
     try {
-      // 获取配置和所有运行中的任务（用于显示厂区状态）
-      const [cfg, allJobs] = await Promise.all([
-        syncApi.getAutoConfig(),
-        syncApi.getJobs({ page: 1, limit: 100 })  // 获取足够多的任务来检查运行状态
-      ]);
-      // 当前页的任务用于显示
-      const pageJobs = await syncApi.getJobs({ page: jobsPage, limit: jobsLimit });
-
+      const cfg = await syncApi.getAutoConfig();
       if (cfg.success && cfg.data) setConfig(cfg.data);
       else if (showLoading) setError(cfg.error || '加载配置失败');
-      if (allJobs.success && allJobs.data) {
-        // 检查运行中的 SIMS 任务
-        const runningJobs: Record<string, SyncJobItem> = {};
-        for (const job of allJobs.data.items) {
-          if (job.status === 'running' && job.sync_type === 'sims') {
-            if (!runningJobs[job.factory_id] || job.started_at > runningJobs[job.factory_id].started_at) {
-              runningJobs[job.factory_id] = job;
-            }
-          }
-        }
-        setSyncingSims(prev => {
-          const newState: Record<string, boolean> = {};
-          for (const fid of Object.keys(runningJobs)) newState[fid] = true;
-          return Object.keys(newState).length > 0 ? newState : {};
-        });
-      }
-      if (pageJobs.success && pageJobs.data) {
-        setRecentJobs(pageJobs.data.items);
-        setJobsTotal(pageJobs.data.total || 0);
-      }
     } catch { if (showLoading) setError('网络错误，无法加载同步配置'); }
     finally { if (showLoading) setLoading(false); }
-  }, [jobsPage, jobsLimit]);
+  }, []);
 
-  const startPolling = useCallback(() => {
-    if (pollRef.current) return;
-    let elapsed = 0;
-    pollRef.current = setInterval(() => {
-      elapsed += 3; fetchData();
-      if (elapsed >= 120 && pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-    }, 3000);
-  }, [fetchData]);
-
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
   useEffect(() => { fetchData(true); }, [fetchData]);
 
   // Generic config update helper
@@ -137,11 +93,8 @@ export default function SyncManagement() {
     setSyncingSims((prev) => { const s: Record<string,boolean> = {}; config?.sims.factories.forEach((f) => s[f.factory_id]=true); return s; });
     try {
       const resp = await syncApi.triggerSync();
-      if (resp.success && resp.data) {
-        showFeedback('success', `全厂区同步任务已启动（${resp.data.job_id}）`);
-        setProgressJob({ jobId: resp.data.job_id, factoryLabel: '全部厂区' });
-        startPolling(); fetchData(true);
-      } else { showFeedback('error', resp.error || '触发失败'); }
+      if (resp.success && resp.data) { showFeedback('success', `全厂区同步任务已启动（${resp.data.job_id}）`); }
+      else { showFeedback('error', resp.error || '触发失败'); }
     } catch { showFeedback('error', '网络错误'); }
     finally { setSyncingSims({}); }
   };
@@ -150,7 +103,7 @@ export default function SyncManagement() {
     setSyncingSims(prev => ({ ...prev, [factoryId]: true }));
     try {
       const resp = await syncApi.triggerSync(factoryId);
-      if (resp.success && resp.data) { setProgressJob({ jobId: resp.data.job_id, factoryLabel: factoryId }); startPolling(); fetchData(true); }
+      if (resp.success && resp.data) { showFeedback('success', `同步任务已启动`); }
       else { showFeedback('error', resp.error || '触发失败'); }
     } catch { showFeedback('error', '网络错误'); }
     finally { setSyncingSims(prev => ({ ...prev, [factoryId]: false })); }
@@ -160,7 +113,7 @@ export default function SyncManagement() {
     setSyncingMes(true);
     try {
       const resp = await syncApi.triggerMesSync();
-      if (resp.success && resp.data) { setProgressJob({ jobId: resp.data.job_id, factoryLabel: 'MES' }); startPolling(); fetchData(true); }
+      if (resp.success && resp.data) { showFeedback('success', `MES 同步任务已启动`); }
       else { showFeedback('error', resp.error || '触发失败'); }
     } catch { showFeedback('error', '网络错误'); }
     finally { setSyncingMes(false); }
@@ -253,50 +206,6 @@ export default function SyncManagement() {
           {saving && <Loader2 className="w-4 h-4 animate-spin" style={{ color: 'var(--color-accent)' }} />}
         </div>
       </SectionCard>
-
-      {/* Recent Jobs */}
-      {recentJobs.length > 0 && (
-        <div className="rounded-xl border shadow-sm overflow-hidden" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}>
-          <div className="px-5 py-3 border-b flex items-center justify-between"
-            style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-secondary)', color: 'var(--color-text-secondary)' }}>
-            <span className="text-[12px] font-bold uppercase tracking-widest">最近同步任务</span>
-            {jobsTotal > jobsLimit && (
-              <div className="flex items-center gap-2">
-                <span className="text-[11px]">{Math.min((jobsPage - 1) * jobsLimit + 1, jobsTotal)}-{Math.min(jobsPage * jobsLimit, jobsTotal)} / {jobsTotal}</span>
-                <button onClick={() => setJobsPage(p => Math.max(1, p - 1))} disabled={jobsPage <= 1}
-                  className="h-6 w-6 rounded border text-[11px] disabled:opacity-30" style={{ borderColor: 'var(--color-border)' }}>‹</button>
-                <button onClick={() => setJobsPage(p => Math.ceil(jobsTotal / jobsLimit) > p ? p + 1 : p)} disabled={jobsPage >= Math.ceil(jobsTotal / jobsLimit)}
-                  className="h-6 w-6 rounded border text-[11px] disabled:opacity-30" style={{ borderColor: 'var(--color-border)' }}>›</button>
-              </div>
-            )}
-          </div>
-          <table className="w-full text-[13px]">
-            <thead><tr style={{ color: 'var(--color-text-muted)', borderBottom: '1px solid var(--color-border)' }}>
-              <th className="text-left font-medium px-5 py-2.5">类型</th><th className="text-left font-medium px-5 py-2.5">厂区</th>
-              <th className="text-left font-medium px-5 py-2.5">状态</th><th className="text-left font-medium px-5 py-2.5">开始时间</th>
-            </tr></thead>
-            <tbody>
-              {recentJobs.map((job) => (
-                <tr key={job.id} style={{ borderBottom: '1px solid var(--color-border)' }}>
-                  <td className="px-5 py-2.5 font-medium" style={{ color: 'var(--color-text-primary)' }}>{job.sync_type === 'sims' ? 'SIMS' : 'MES'}</td>
-                  <td className="px-5 py-2.5 font-mono text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>{job.factory_id}</td>
-                  <td className="px-5 py-2.5">
-                    <span className="inline-flex items-center gap-1 text-[12px] font-medium px-2 py-0.5 rounded-full"
-                      style={{ backgroundColor: job.status === 'completed' ? 'rgba(16,185,129,0.1)' : job.status === 'failed' ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)',
-                              color: job.status === 'completed' ? '#059669' : job.status === 'failed' ? '#dc2626' : '#d97706' }}>
-                      {job.status === 'running' && <Loader2 className="w-3 h-3 animate-spin" />}
-                      {job.status === 'completed' ? '完成' : job.status === 'failed' ? '失败' : '运行中'}
-                    </span>
-                  </td>
-                  <td className="px-5 py-2.5 font-mono text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>{formatTime(job.started_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {progressJob && <SyncProgressModal jobId={progressJob.jobId} factoryLabel={progressJob.factoryLabel} onClose={() => setProgressJob(null)} />}
 
       {feedback && (
         <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-lg text-sm font-medium shadow-lg animate-pulse"
