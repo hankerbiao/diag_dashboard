@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, type KeyboardEvent } from 'react';
-import { Bot, Clock, ChevronRight } from 'lucide-react';
+import { Bot, Clock, ChevronRight, Loader2 } from 'lucide-react';
 import type { FactorySite, DiagnosisResult as DiagnosisResultType, SnHistoryItem as SnHistoryItemType } from '../../api/fastapi';
 import { diagnosisApi } from '../../api/fastapi';
 import DiagnosisInput from './DiagnosisInput';
@@ -9,10 +9,11 @@ import DiagnosisHistoryModal from './DiagnosisHistoryModal';
 import ProgressIndicator from '../common/ProgressIndicator';
 import { collectFailedTestLogs } from '../../utils/testStatus';
 
-const SN_STAGES = ['device', 'sims', 'cases', 'ragflow', 'llm'] as const;
+const SN_STAGES = ['device', 'sims', 'logfiles', 'cases', 'ragflow', 'llm'] as const;
 const SN_STAGE_LABELS: Record<string, string> = {
   device: '查询设备信息',
   sims: 'SIMS 实时查询测试数据',
+  logfiles: '下载失败项原文日志',
   cases: '匹配历史案例',
   ragflow: '检索知识库文档',
   llm: '大模型深度诊断推理',
@@ -52,6 +53,7 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
   const [historyId, setHistoryId] = useState<string | null>(null);
   const [historyList, setHistoryList] = useState<SnHistoryItemType[]>([]);
   const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -61,10 +63,24 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
   const factoryReady = Boolean(factory);
 
   const fetchHistory = useCallback(async () => {
-    const res = await diagnosisApi.getSnHistoryList({ factory: factory || undefined, limit: 20 });
-    if (res.success && res.data) {
-      setHistoryList(res.data.items);
-      setHistoryTotal(res.data.total);
+    if (!factory) {
+      setHistoryList([]);
+      setHistoryTotal(0);
+      setHistoryLoading(false);
+      return;
+    }
+    setHistoryLoading(true);
+    try {
+      const res = await diagnosisApi.getSnHistoryList({ factory, limit: 20 });
+      if (res.success && res.data) {
+        setHistoryList(res.data.items);
+        setHistoryTotal(res.data.total);
+      } else {
+        setHistoryList([]);
+        setHistoryTotal(0);
+      }
+    } finally {
+      setHistoryLoading(false);
     }
   }, [factory]);
 
@@ -208,16 +224,29 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
         onKeyDown={handleKeyDown}
       />
 
-      {historyList.length > 0 && !loading && (
+      {!loading && factoryReady && (
         <div className="px-6 py-2 border-b shrink-0" style={{ borderColor: 'var(--color-border)' }}>
           <button
+            type="button"
             onClick={() => setHistoryExpanded(true)}
-            className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-widest"
+            className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-widest hover:opacity-80 transition-opacity"
             style={{ color: 'var(--color-text-secondary)' }}
           >
-            <Clock className="w-3.5 h-3.5" />
-            历史诊断记录（{historyTotal > historyList.length ? `最近 ${historyList.length} / 共 ${historyTotal}` : historyList.length}）
-            <ChevronRight className="w-3.5 h-3.5" />
+            {historyLoading ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                历史诊断记录 · 加载中…
+              </>
+            ) : (
+              <>
+                <Clock className="w-3.5 h-3.5" />
+                历史诊断记录
+                {historyTotal > 0
+                  ? `（${historyTotal > historyList.length ? `最近 ${historyList.length} / 共 ${historyTotal}` : historyTotal}）`
+                  : '（暂无）'}
+                <ChevronRight className="w-3.5 h-3.5" />
+              </>
+            )}
           </button>
         </div>
       )}
@@ -225,8 +254,11 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
       {historyExpanded && (
         <DiagnosisHistoryModal
           items={historyList}
+          total={historyTotal}
           factorySites={factorySites}
+          factoryLabel={factoryLabel}
           activeId={activeHistoryId}
+          loading={historyLoading}
           onClose={() => setHistoryExpanded(false)}
           onSelect={handleHistoryClick}
         />
@@ -292,54 +324,24 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
             </div>
           </div>
         ) : (
-          <div className="flex-1 flex items-center justify-center p-8">
-            <div className="max-w-md w-full space-y-6">
-              <div className="text-center space-y-4">
-                <div
-                  className="w-16 h-16 mx-auto rounded-2xl flex items-center justify-center shadow-lg"
-                  style={{ background: 'linear-gradient(135deg, #3b82f6, #6366f1)', boxShadow: '0 8px 24px -4px rgba(59, 130, 246, 0.35)' }}
-                >
-                  <Bot className="w-8 h-8 text-white" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-bold" style={{ color: 'var(--color-text-primary)' }}>
-                    🤖 AI 智能诊断
-                  </h2>
-                  {factoryReady ? (
-                    <div className="mt-3 space-y-2 text-sm text-left" style={{ color: 'var(--color-text-secondary)' }}>
-                      <p>📍 当前厂区：<span className="font-medium" style={{ color: 'var(--color-text-primary)' }}>{factoryLabel}</span></p>
-                      <p>🔍 输入 SN，从 SIMS 拉取实时测试数据</p>
-                      <p>🧠 大模型分析根因 · 匹配案例 · 检索知识库</p>
-                    </div>
-                  ) : (
-                    <p className="text-sm mt-2" style={{ color: 'var(--color-text-secondary)' }}>
-                      ⏳ 厂区列表加载中，请稍候再开始诊断
-                    </p>
-                  )}
-                </div>
+          <div className="flex-1 flex items-center justify-center p-6 min-h-[120px]">
+            <div className="max-w-md w-full text-center space-y-3">
+              <div
+                className="w-12 h-12 mx-auto rounded-xl flex items-center justify-center shadow-md"
+                style={{ background: 'linear-gradient(135deg, #3b82f6, #6366f1)' }}
+              >
+                <Bot className="w-6 h-6 text-white" />
               </div>
-              {factoryReady && (
-                <div className="flex flex-wrap justify-center gap-2">
-                  {[
-                    { icon: '🤖', label: 'AI 推理' },
-                    { icon: '📡', label: 'SIMS 实时' },
-                    { icon: '💎', label: '海光 DCU' },
-                    { icon: '📚', label: '案例 & RAG' },
-                  ].map((tag) => (
-                    <span
-                      key={tag.label}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border"
-                      style={{
-                        borderColor: 'var(--color-border)',
-                        backgroundColor: 'var(--color-bg-secondary)',
-                        color: 'var(--color-text-secondary)',
-                      }}
-                    >
-                      <span aria-hidden>{tag.icon}</span>
-                      {tag.label}
-                    </span>
-                  ))}
-                </div>
+              <h2 className="text-base font-bold" style={{ color: 'var(--color-text-primary)' }}>
+                🤖 输入 SN 开始诊断
+              </h2>
+              {factoryReady ? (
+                <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+                  当前厂区：<span className="font-medium" style={{ color: 'var(--color-text-primary)' }}>{factoryLabel}</span>
+                  · 点击上方「历史诊断记录」查看
+                </p>
+              ) : (
+                <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>⏳ 厂区加载中…</p>
               )}
             </div>
           </div>

@@ -148,47 +148,10 @@ export default function DiagnosisResult({ result, factory }: DiagnosisResultProp
               的图谱推理分析已完成。系统已交叉比对 SIMS 测试日志与历史维修记录，并调用了相应的故障知识经验库。
               {failedLogs.length > 0 && (
                 <span className="block mt-2 font-medium" style={{ color: '#dc2626' }}>
-                  共识别 {failedLogs.length} 条 SIMS 失败测试项，已纳入下方分析与日志原文。
+                  共识别 {failedLogs.length} 条失败测试项，可在下方查看日志详情。
                 </span>
               )}
             </div>
-
-            {failedLogs.length > 0 && (
-              <div className="space-y-3">
-                <h3
-                  className="text-xs font-bold uppercase tracking-widest flex items-center gap-2"
-                  style={{ color: 'var(--color-text-secondary)' }}
-                >
-                  <AlertTriangle className="w-4 h-4 text-red-500" />
-                  SIMS 失败测试项（{failedLogs.length}）
-                </h3>
-                <div
-                  className="rounded-xl border overflow-hidden shadow-sm"
-                  style={{ borderColor: 'rgba(239,68,68,0.25)', backgroundColor: 'var(--color-bg-primary)' }}
-                >
-                  {failedLogs.map((log) => (
-                    <div
-                      key={log.id}
-                      className="flex items-center gap-3 px-4 py-2.5 border-b last:border-b-0 text-[12px]"
-                      style={{ borderColor: 'var(--color-border)' }}
-                    >
-                      <span className="font-mono shrink-0" style={{ color: 'var(--color-text-muted)' }}>
-                        {log.test_time}
-                      </span>
-                      <span className="font-medium flex-1 truncate" style={{ color: 'var(--color-text-primary)' }}>
-                        {log.test_item}
-                      </span>
-                      <ResultBadge status={log.fail_details || '-'} />
-                      {(log.fault_type1 || log.fault_type2 || log.fault_type3) && (
-                        <span className="hidden sm:inline text-[11px] truncate max-w-[140px]" style={{ color: '#dc2626' }}>
-                          {[log.fault_type1, log.fault_type2, log.fault_type3].filter(Boolean).join(' / ')}
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {result.summary && (
               <div className="space-y-3">

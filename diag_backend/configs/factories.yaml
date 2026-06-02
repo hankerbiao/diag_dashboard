@@ -20,8 +20,13 @@ factories:
     name: 桐乡厂区
     base_url: http://10.30.14.23
     log_base_url: ftp://10.30.14.12
+    # 若 FTP 禁止匿名登录，配置账号（也可用 log_base_url: ftp://user:pass@10.30.14.12）
+    # log_ftp_user: your_user
+    # log_ftp_password: your_password
 
   - factory_id: datong
     name: 大同厂区
     base_url: http://10.39.102.32
     log_base_url: ftp://10.39.102.31
+    # log_ftp_user:
+    # log_ftp_password:

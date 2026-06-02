@@ -175,6 +175,15 @@ async def _gather_sn_data(
 
     llm_logs = all_logs
 
+    log_file_context = await _download_failed_item_logs(
+        log_base_url=factory_cfg.get("log_base_url", ""),
+        failed_logs=failed_logs,
+        factory_label=factory_label,
+        ftp_user=factory_cfg.get("log_ftp_user"),
+        ftp_password=factory_cfg.get("log_ftp_password"),
+        on_progress=_progress if on_progress else None,
+    )
+
     if failed_logs:
         await _progress("cases", f"正在匹配历史案例（{len(failed_logs)} 条失败项）...")
     else:
@@ -230,6 +239,9 @@ async def _gather_sn_data(
                 kb_context = "\n".join(kb_lines)
     except Exception as e:
         logger.warning("知识库检索失败", extra={"sn": sn, "error": str(e)})
+
+    if log_file_context:
+        kb_context = f"{kb_context}\n\n{log_file_context}" if kb_context else log_file_context
 
     return (
         device,
@@ -386,9 +398,16 @@ async def get_sn_log_content(
         if not log_base_url:
             return ApiResponse(success=False, error="厂区 log_base_url 未配置")
 
-        content = await _download_log_tail(log_base_url, safe_path)
+        content, dl_error = await _download_log_tail(
+            log_base_url,
+            safe_path,
+            ftp_user=factory_info.get("log_ftp_user"),
+            ftp_password=factory_info.get("log_ftp_password"),
+        )
+        if dl_error:
+            return ApiResponse(success=False, error=dl_error)
         if not content:
-            return ApiResponse(success=False, error="日志内容为空或下载失败")
+            return ApiResponse(success=False, error="日志内容为空")
         return ApiResponse(success=True, data={"content": content})
     except ValueError as e:
         return ApiResponse(success=False, error=str(e))
@@ -447,6 +466,7 @@ async def _get_error_log_detail(error_log_id: str) -> Optional[dict]:
             return {
                 "id": str(doc["_id"]),
                 "sn": doc.get("server_sn", ""),
+                "factory_id": doc.get("factory_id", ""),
                 "test_item": doc.get("detailed_flow", doc.get("big_flow", "")),
                 "test_time": doc.get("test_time", ""),
                 "fail_details": doc.get("server_test_result", ""),
@@ -460,15 +480,107 @@ async def _get_error_log_detail(error_log_id: str) -> Optional[dict]:
     return await knowledge_graph.get_error_log_by_id(error_log_id)
 
 
-async def _download_log_tail(
-    log_base_url: str, log_path: str, tail_lines: int = LOG_TAIL_LINES
+def _resolve_log_download_config(
+    log_base_url_query: str,
+    factory_id: str = "",
+) -> tuple[str, Optional[str], Optional[str]]:
+    """解析日志下载地址与 FTP 凭据（查询参数优先，否则用厂区 YAML）。"""
+    factory_info = get_factory_by_id(factory_id) if factory_id else None
+    base_url = (log_base_url_query or "").strip() or (
+        (factory_info or {}).get("log_base_url") or ""
+    )
+    if not factory_info:
+        return base_url, None, None
+    return (
+        base_url,
+        factory_info.get("log_ftp_user"),
+        factory_info.get("log_ftp_password"),
+    )
+
+
+async def _download_failed_item_logs(
+    *,
+    log_base_url: str,
+    failed_logs: list[dict],
+    factory_label: str,
+    ftp_user: Optional[str] = None,
+    ftp_password: Optional[str] = None,
+    on_progress: Optional[Callable[[str, str], Awaitable[None]]] = None,
+    max_files: int = 5,
 ) -> str:
-    if not log_base_url or not log_path:
+    """下载失败项原文日志；若存在 log_path 但全部失败则中止 SN 诊断。"""
+    with_path = [fl for fl in failed_logs if (fl.get("log_path") or "").strip()]
+    if not with_path:
         return ""
+
+    if not log_base_url:
+        raise ValueError(
+            f"厂区「{factory_label}」未配置 log_base_url，无法下载失败项原文日志，已中止诊断。"
+        )
+
+    if on_progress:
+        await on_progress(
+            "logfiles",
+            f"正在下载失败项原文日志（最多 {min(len(with_path), max_files)} 个）...",
+        )
+
+    blocks: list[str] = []
+    errors: list[str] = []
+
+    for fl in with_path[:max_files]:
+        log_path = (fl.get("log_path") or "").strip()
+        content, dl_error = await _download_log_tail(
+            log_base_url,
+            log_path,
+            ftp_user=ftp_user,
+            ftp_password=ftp_password,
+        )
+        if dl_error:
+            errors.append(f"{fl.get('test_item', log_path)}: {dl_error}")
+            continue
+        if not content.strip():
+            errors.append(f"{fl.get('test_item', log_path)}: 日志内容为空")
+            continue
+        blocks.append(
+            f"### [{fl.get('test_time', '')}] {fl.get('test_item', '')}\n"
+            f"路径: {log_path}\n```\n{content}\n```"
+        )
+
+    if not blocks:
+        detail = "；".join(errors[:3])
+        if len(errors) > 3:
+            detail += f" … 共 {len(errors)} 条失败"
+        raise ValueError(f"失败项原文日志全部下载失败，已中止 AI 诊断: {detail}")
+
+    if on_progress:
+        msg = f"已下载 {len(blocks)} 份失败项原文日志"
+        if errors:
+            msg += f"（{len(errors)} 条下载失败已跳过）"
+        await on_progress("logfiles", msg)
+
+    return "\n\n## 失败项原文日志（SIMS log_path）\n" + "\n\n".join(blocks)
+
+
+async def _download_log_tail(
+    log_base_url: str,
+    log_path: str,
+    tail_lines: int = LOG_TAIL_LINES,
+    *,
+    ftp_user: Optional[str] = None,
+    ftp_password: Optional[str] = None,
+) -> tuple[str, Optional[str]]:
+    """下载日志尾部。返回 (content, error_message)，成功时 error_message 为 None。"""
+    if not log_base_url or not log_path:
+        return "", "log_base_url 或 log_path 为空"
     url = f"{log_base_url.rstrip('/')}/{log_path.lstrip('/')}"
     try:
         if url.startswith("ftp://"):
-            return await _download_log_tail_ftp(url, tail_lines)
+            return await _download_log_tail_ftp(
+                url,
+                tail_lines,
+                ftp_user=ftp_user,
+                ftp_password=ftp_password,
+            )
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(url)
             resp.raise_for_status()
@@ -485,29 +597,108 @@ async def _download_log_tail(
                     lines = [
                         ln for ln in tree.text_content().strip().splitlines() if ln.strip()
                     ]
-                    return "\n".join(lines)
+                    return "\n".join(lines), None
                 except Exception as e:
-                    logger.warning("HTML 解析失败", extra={"url": url, "error": str(e)})
+                    logger.warning(
+                        "HTML 解析失败 url=%s error_type=%s error=%s",
+                        url,
+                        type(e).__name__,
+                        e,
+                    )
 
             if len(text) > MAX_LOG_BYTES:
                 text = text[-MAX_LOG_BYTES:]
             lines = text.splitlines()
-            return "\n".join(lines[-tail_lines:] if len(lines) > tail_lines else lines)
+            return "\n".join(lines[-tail_lines:] if len(lines) > tail_lines else lines), None
+    except httpx.HTTPStatusError as e:
+        detail = (
+            f"HTTP 日志下载失败: {e.response.status_code} {e.response.reason_phrase} "
+            f"url={url}"
+        )
+        logger.warning("%s body_preview=%s", detail, (e.response.text or "")[:200])
+        return "", detail
+    except httpx.RequestError as e:
+        detail = f"HTTP 日志下载网络错误 url={url} error={type(e).__name__}: {e}"
+        logger.warning(detail)
+        return "", detail
     except Exception as e:
-        logger.warning("日志下载失败", extra={"url": url, "error": str(e)})
-        return ""
+        detail = f"日志下载失败 url={url} error={type(e).__name__}: {e}"
+        logger.warning(detail)
+        return "", detail
 
 
-async def _download_log_tail_ftp(url: str, tail_lines: int) -> str:
-    """通过 FTP 下载日志尾部内容"""
-    from urllib.parse import urlparse
+def _describe_ftp_error(
+    e: Exception,
+    *,
+    host: str,
+    port: int,
+    path: str,
+    auth_user: str,
+    used_anonymous: bool,
+) -> str:
+    """将 FTP 异常转为可排查的说明（不含密码）。"""
+    import ftplib
+
+    parts = [
+        f"FTP 日志下载失败",
+        f"host={host}:{port}",
+        f"path={path or '/'}",
+        f"user={auth_user or 'anonymous'}",
+        f"auth={'anonymous' if used_anonymous else 'credentials'}",
+        f"error_type={type(e).__name__}",
+        f"error={e}",
+    ]
+    if isinstance(e, ftplib.error_perm):
+        reply = e.args[0] if e.args else ""
+        parts.append(f"ftp_reply={reply}")
+        if "530" in str(reply) or "Login" in str(reply):
+            parts.append(
+                "hint=登录被拒绝，FTP 可能禁止匿名访问，请在厂区配置 log_ftp_user/log_ftp_password"
+            )
+        elif "550" in str(reply):
+            parts.append("hint=文件不存在或无读取权限，请核对 log_path 与 FTP 目录")
+    elif isinstance(e, ftplib.error_temp):
+        parts.append(f"ftp_reply={e.args[0] if e.args else ''}")
+    elif isinstance(e, (TimeoutError, OSError)):
+        parts.append("hint=连接超时或网络不可达，请确认后端能访问 FTP 主机与 21 端口")
+    return " | ".join(parts)
+
+
+async def _download_log_tail_ftp(
+    url: str,
+    tail_lines: int,
+    *,
+    ftp_user: Optional[str] = None,
+    ftp_password: Optional[str] = None,
+) -> tuple[str, Optional[str]]:
+    """通过 FTP 下载日志尾部内容。支持 URL 内嵌账号或厂区 log_ftp_user/log_ftp_password。"""
+    from urllib.parse import urlparse, unquote
     import ftplib
     import io
 
     parsed = urlparse(url)
     host = parsed.hostname or "localhost"
     port = parsed.port or 21
-    path = parsed.path or ""
+    path = unquote(parsed.path or "")
+
+    auth_user = unquote(parsed.username) if parsed.username else (ftp_user or "anonymous")
+    auth_password = (
+        unquote(parsed.password)
+        if parsed.password is not None
+        else (ftp_password if ftp_password is not None else "")
+    )
+    used_anonymous = auth_user in ("anonymous", "") and not auth_password
+    if auth_user in ("", "anonymous"):
+        auth_user = "anonymous"
+
+    logger.debug(
+        "FTP 日志下载开始 host=%s port=%s path=%s user=%s anonymous=%s",
+        host,
+        port,
+        path,
+        auth_user,
+        used_anonymous,
+    )
 
     try:
         loop = asyncio.get_event_loop()
@@ -516,7 +707,7 @@ async def _download_log_tail_ftp(url: str, tail_lines: int) -> str:
         def _ftp_download():
             ftp = ftplib.FTP()
             ftp.connect(host, port, timeout=30)
-            ftp.login()  # anonymous
+            ftp.login(auth_user, auth_password)
             ftp.retrbinary(f"RETR {path}", buf.write)
             ftp.quit()
 
@@ -526,10 +717,34 @@ async def _download_log_tail_ftp(url: str, tail_lines: int) -> str:
         if len(text) > MAX_LOG_BYTES:
             text = text[-MAX_LOG_BYTES:]
         lines = text.splitlines()
-        return "\n".join(lines[-tail_lines:] if len(lines) > tail_lines else lines)
+        content = "\n".join(lines[-tail_lines:] if len(lines) > tail_lines else lines)
+        logger.debug(
+            "FTP 日志下载成功 host=%s path=%s bytes=%s lines=%s",
+            host,
+            path,
+            len(buf.getvalue()),
+            len(lines),
+        )
+        return content, None
     except Exception as e:
-        logger.warning("FTP 日志下载失败", extra={"url": url, "error": str(e)})
-        return ""
+        detail = _describe_ftp_error(
+            e,
+            host=host,
+            port=port,
+            path=path,
+            auth_user=auth_user,
+            used_anonymous=used_anonymous,
+        )
+        logger.warning(detail)
+        logger.debug(
+            "FTP 日志下载详情 url=%s host=%s port=%s path=%s user=%s",
+            url,
+            host,
+            port,
+            path,
+            auth_user,
+        )
+        return "", detail
 
 
 def _build_cache_response(
@@ -581,9 +796,34 @@ async def _run_analysis(
     if not error_log:
         raise ValueError("未找到异常日志")
 
-    log_tail = await _download_log_tail(log_base_url, error_log.get("log_path", ""))
+    log_path = (error_log.get("log_path") or "").strip()
+    resolved_url, ftp_user, ftp_password = _resolve_log_download_config(
+        log_base_url,
+        error_log.get("factory_id", ""),
+    )
+    log_tail = ""
+    sections: list[str] = []
 
-    sections = [f"## 日志文件尾部内容\n```\n{log_tail}\n```"] if log_tail else []
+    if log_path:
+        await send_progress("download", "正在下载日志文件...")
+        if not resolved_url:
+            raise ValueError(
+                "该记录有日志路径但厂区 log_base_url 未配置，已中止 AI 诊断。"
+            )
+        log_tail, dl_error = await _download_log_tail(
+            resolved_url,
+            log_path,
+            ftp_user=ftp_user,
+            ftp_password=ftp_password,
+        )
+        if dl_error:
+            raise ValueError(f"日志下载失败，已中止 AI 诊断: {dl_error}")
+        if not log_tail.strip():
+            raise ValueError("日志下载成功但内容为空，已中止 AI 诊断。")
+        await send_progress("download", "日志下载完成")
+        sections.append(f"## 日志文件尾部内容\n```\n{log_tail}\n```")
+    else:
+        await send_progress("download", "无 log_path，跳过原文日志下载")
 
     await send_progress("ragflow", "正在检索知识库...")
     refs_result = []
