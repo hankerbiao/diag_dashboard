@@ -7,6 +7,7 @@ import DiagnosisResult from './DiagnosisResult';
 import DiagnosisChat, { type ChatMessage } from './DiagnosisChat';
 import DiagnosisHistoryModal from './DiagnosisHistoryModal';
 import ProgressIndicator from '../common/ProgressIndicator';
+import SupportHint from '../common/SupportHint';
 import { collectFailedTestLogs } from '../../utils/testStatus';
 
 const SN_STAGES = ['device', 'sims', 'logfiles', 'cases', 'ragflow', 'llm'] as const;
@@ -298,6 +299,7 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
         ) : error ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6">
             <p className="text-sm text-red-500 text-center max-w-lg">{error}</p>
+            <SupportHint className="max-w-lg text-center justify-center" extra="详细说明见系统设置 → 使用文档" />
             <button
               onClick={handleDiagnose}
               disabled={!factoryReady || !sn.trim()}
@@ -336,10 +338,13 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
                 🤖 输入 SN 开始诊断
               </h2>
               {factoryReady ? (
-                <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-                  当前厂区：<span className="font-medium" style={{ color: 'var(--color-text-primary)' }}>{factoryLabel}</span>
-                  · 点击上方「历史诊断记录」查看
-                </p>
+                <>
+                  <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+                    当前厂区：<span className="font-medium" style={{ color: 'var(--color-text-primary)' }}>{factoryLabel}</span>
+                    · 点击上方「历史诊断记录」查看
+                  </p>
+                  <SupportHint className="justify-center" extra="SIMS/日志/大模型异常可光圈联系libiao1" />
+                </>
               ) : (
                 <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>⏳ 厂区加载中…</p>
               )}

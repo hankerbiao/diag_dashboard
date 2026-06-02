@@ -3,6 +3,7 @@ import { Bot, CheckCircle2, RefreshCw, ArrowUpDown, Info, Download, Loader2, X }
 import type { ErrorLogRow } from '../../types';
 import { diagnosisApi, type DiagnosisCache } from '../../api/fastapi';
 import ResultBadge, { isFailureStatus } from '../common/ResultBadge';
+import SupportHint from '../common/SupportHint';
 
 interface ErrorTableProps {
   data: ErrorLogRow[];
@@ -136,6 +137,7 @@ export default function ErrorTable({
       <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center" style={{ color: 'var(--color-text-secondary)' }}>
         <Info className="w-8 h-8 opacity-40" />
         <span className="text-sm">{emptyHint || '暂无测试详情数据'}</span>
+        <SupportHint compact className="justify-center max-w-sm" />
       </div>
     );
   }
@@ -318,7 +320,10 @@ export default function ErrorTable({
           </div>
           <div className="flex-1 min-h-0 overflow-auto custom-scrollbar p-4">
             {logViewer.error ? (
-              <p className="text-sm" style={{ color: '#dc2626' }}>{logViewer.error}</p>
+              <div className="space-y-3">
+                <p className="text-sm" style={{ color: '#dc2626' }}>{logViewer.error}</p>
+                <SupportHint compact />
+              </div>
             ) : (
               <pre
                 className="text-[11px] leading-relaxed whitespace-pre-wrap break-all font-mono rounded-lg p-3 border"

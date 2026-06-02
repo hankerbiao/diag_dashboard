@@ -1,4 +1,5 @@
 import { CheckCircle2 } from 'lucide-react';
+import SupportHint from '../common/SupportHint';
 
 export default function Footer() {
   return (
@@ -10,11 +11,12 @@ export default function Footer() {
         color: 'var(--color-text-secondary)',
       }}
     >
-      <div className="flex items-center gap-4 font-medium">
-        <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-4 font-medium min-w-0">
+        <div className="flex items-center gap-1.5 shrink-0">
           <CheckCircle2 className="w-3.5 h-3.5" style={{ color: 'var(--color-accent)' }} />
           系统连通性正常
         </div>
+        <SupportHint compact className="hidden sm:flex truncate" extra="使用说明见系统设置" />
       </div>
 
       <div className="flex items-center gap-4 font-medium tracking-wide">

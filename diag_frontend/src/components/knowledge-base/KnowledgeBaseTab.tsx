@@ -3,6 +3,7 @@ import {
   AlertCircle, Database, FileArchive, Search,
   CheckCircle2, Clock, RefreshCw, Trash2, X, BookOpen,
 } from 'lucide-react';
+import SupportHint from '../common/SupportHint';
 import { knowledgeBaseApi, KnowledgeDoc } from '../../api/fastapi';
 import UploadZone from './UploadZone';
 import DocDetailDrawer from './DocDetailDrawer';
@@ -190,6 +191,7 @@ export default function KnowledgeBaseTab() {
           <p className="text-[13px] text-slate-500 mt-1 max-w-2xl leading-relaxed">
             上传常见格式的历史维修文档、SOP教程、机身图解及日志规范。所有文件将自动通过 OCR 与文档切分引擎处理，并向量化入库，部署于海光DCU服务器上作为大模型深度诊断参考。
           </p>
+          <SupportHint compact className="mt-2" />
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <button onClick={() => setShowSearch(true)}

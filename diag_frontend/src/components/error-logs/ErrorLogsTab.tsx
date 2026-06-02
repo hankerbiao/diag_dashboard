@@ -8,6 +8,7 @@ import SearchPanel from './SearchPanel';
 import AnalysisModal from './AnalysisModal';
 import ServerDetailModal from './ServerDetailModal';
 import BatchTestCharts from './charts/BatchTestCharts';
+import SupportHint from '../common/SupportHint';
 
 interface ErrorLogsTabProps {
   factory: string;
@@ -314,13 +315,14 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
                   <span className="text-xs">加载中...</span>
                 </div>
               ) : servers.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-8 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                <div className="flex flex-col items-center justify-center py-8 text-xs gap-2" style={{ color: 'var(--color-text-secondary)' }}>
                   <span>暂无匹配的服务器</span>
-                  <span className="mt-2" style={{ color: 'var(--color-text-muted)' }}>
+                  <span style={{ color: 'var(--color-text-muted)' }}>
                     {factory
                       ? `当前基地：${currentFactory?.name ?? factory}，请确认 SN 是否正确`
                       : '请在右上角选择目标基地后重试'}
                   </span>
+                  <SupportHint compact className="justify-center mt-1" />
                 </div>
               ) : (
                 <table className="w-full text-left text-[12px]">

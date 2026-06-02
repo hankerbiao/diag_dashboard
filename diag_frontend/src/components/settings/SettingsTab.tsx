@@ -1,8 +1,9 @@
 import { useRef, useState, useCallback } from 'react';
-import { CheckCircle2, AlertCircle } from 'lucide-react';
+import { CheckCircle2, AlertCircle, BookOpen } from 'lucide-react';
 import ApiConfig from './ApiConfig';
 import type { ApiConfigHandle } from './ApiConfig';
 import SyncManagement from './SyncManagement';
+import GuideTab from '../guide/GuideTab';
 export default function SettingsTab() {
   const apiConfigRef = useRef<ApiConfigHandle>(null);
   const [saving, setSaving] = useState(false);
@@ -37,6 +38,22 @@ export default function SettingsTab() {
       <div className="w-full max-w-4xl space-y-8 pb-12">
         <SyncManagement />
         <ApiConfig ref={apiConfigRef} />
+
+        <section
+          className="rounded-xl border p-6 space-y-4"
+          style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
+        >
+          <div className="flex items-center gap-2">
+            <BookOpen className="w-5 h-5" style={{ color: 'var(--color-accent)' }} />
+            <h2 className="text-[15px] font-bold" style={{ color: 'var(--color-text-primary)' }}>
+              使用文档
+            </h2>
+          </div>
+          <p className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
+            面向产线操作人员的快速指南；遇到问题可光圈联系libiao1。
+          </p>
+          <GuideTab embedded />
+        </section>
 
         {feedback && (
           <div

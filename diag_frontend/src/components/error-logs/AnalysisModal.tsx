@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { Bot, Sparkles, AlertTriangle, Wrench, Terminal, RefreshCw, X, BookOpen, FileText } from 'lucide-react';
 import type { ErrorLogRow } from '../../types';
 import type { DiagnosisCache } from '../../api/fastapi';
+import SupportHint from '../common/SupportHint';
 
 interface AnalysisModalProps {
   selectedLog: ErrorLogRow | null;
@@ -278,6 +279,13 @@ export default function AnalysisModal({
               ) : null}
             </div>
           </div>
+        </div>
+
+        <div
+          className="px-6 py-2.5 border-t shrink-0 flex justify-center"
+          style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}
+        >
+          <SupportHint compact />
         </div>
       </div>
 

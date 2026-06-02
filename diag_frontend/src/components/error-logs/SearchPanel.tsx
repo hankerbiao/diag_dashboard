@@ -1,5 +1,6 @@
 import { LayoutDashboard } from 'lucide-react';
 import type { FactorySite } from '../../api/fastapi';
+import SupportHint from '../common/SupportHint';
 
 interface SearchPanelProps {
   factory: string;
@@ -111,6 +112,12 @@ export default function SearchPanel({
           重置
         </button>
       </div>
+
+      <SupportHint
+        className="mt-4 pt-3 border-t"
+        style={{ borderColor: 'var(--color-border)' }}
+        extra="详细说明见系统设置 → 使用文档"
+      />
     </div>
   );
 }

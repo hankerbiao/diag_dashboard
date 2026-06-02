@@ -18,6 +18,8 @@ const TAB_TITLES: Record<NavigationTab, string> = {
   settings: '系统管理与 AI 引擎配置',
 };
 
+const TABS_WITH_FACTORY = new Set<NavigationTab>(['diagnosis', 'error_logs']);
+
 function getInitials(email: string): string {
   const name = email.split('@')[0];
   return name.slice(0, 2).toUpperCase();
@@ -45,39 +47,43 @@ export default function Header({ activeTab, factory, factories, onFactoryChange 
       <div className="flex items-center gap-4 text-xs font-medium">
         <ThemeToggle />
 
-        <div className="w-px h-5" style={{ backgroundColor: 'var(--color-border)' }} />
+        {TABS_WITH_FACTORY.has(activeTab) && (
+          <>
+            <div className="w-px h-5" style={{ backgroundColor: 'var(--color-border)' }} />
 
-        <div className="flex items-center gap-2 mr-2">
-          <span
-            className="font-bold"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
-            运行厂区:
-          </span>
-          <select
-            value={factory}
-            onChange={(e) => onFactoryChange(e.target.value)}
-            className="h-7 px-2 rounded shadow-sm outline-none transition-colors font-bold cursor-pointer appearance-none pr-8 border"
-            style={{
-              backgroundColor: 'var(--color-bg-secondary)',
-              borderColor: 'var(--color-border)',
-              color: 'var(--color-text-primary)',
-              backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e")`,
-              backgroundRepeat: 'no-repeat',
-              backgroundPosition: 'right 0.5rem center',
-              backgroundSize: '1em 1em',
-            }}
-          >
-            {factories.length === 0 && <option value="">-- 加载中 --</option>}
-            {factories.map((f) => (
-              <option key={f.factory_id} value={f.factory_id}>
-                {f.name}
-              </option>
-            ))}
-          </select>
-        </div>
+            <div className="flex items-center gap-2 mr-2">
+              <span
+                className="font-bold"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                运行厂区:
+              </span>
+              <select
+                value={factory}
+                onChange={(e) => onFactoryChange(e.target.value)}
+                className="h-7 px-2 rounded shadow-sm outline-none transition-colors font-bold cursor-pointer appearance-none pr-8 border"
+                style={{
+                  backgroundColor: 'var(--color-bg-secondary)',
+                  borderColor: 'var(--color-border)',
+                  color: 'var(--color-text-primary)',
+                  backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e")`,
+                  backgroundRepeat: 'no-repeat',
+                  backgroundPosition: 'right 0.5rem center',
+                  backgroundSize: '1em 1em',
+                }}
+              >
+                {factories.length === 0 && <option value="">-- 加载中 --</option>}
+                {factories.map((f) => (
+                  <option key={f.factory_id} value={f.factory_id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        <div className="w-px h-5" style={{ backgroundColor: 'var(--color-border)' }} />
+            <div className="w-px h-5" style={{ backgroundColor: 'var(--color-border)' }} />
+          </>
+        )}
 
         {user ? (
           <div className="flex items-center gap-3 pl-2">
