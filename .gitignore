@@ -41,3 +41,5 @@ scripts/data/
 .env.local
 .env.*.local
 !.env.example
+docker/.env
+scripts/sync_config.yaml

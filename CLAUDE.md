@@ -42,24 +42,20 @@ ruff check .             # 代码检查
 ruff format .            # 代码格式化
 ```
 
-### 独立数据同步脚本 (`scripts/`)
+### 独立数据同步 (`scripts/`，不在 API 进程内执行)
 ```bash
-cd scripts
-pip install -r requirements.txt          # 依赖: requests, PyYAML, pymongo, tqdm
+pip install -r scripts/requirements.txt
+cp scripts/sync_config.example.yaml scripts/sync_config.yaml
 
-# sync_data.py — 从各厂区 MES API 同步测试数据到 MongoDB
-python sync_data.py                      # 默认近 24 小时
-python sync_data.py --hours 48           # 近 48 小时
-python sync_data.py --hours 0            # 全量同步
-python sync_data.py --factory kunshan    # 仅同步指定厂区
-python sync_data.py --dry-run            # 试运行
+# 一键：SIMS 测试数据 + MES 维修记录 → MongoDB
+python scripts/weaveeye_sync.py run
+./scripts/run_sync.sh                    # 可配合 crontab
 
-# sync_mes.py — 从 MES 主 API 同步维修记录到 MongoDB + 上传 RAGFlow
-python sync_mes.py                       # 同步并上传知识库
-python sync_mes.py --no-ragflow          # 仅同步 MongoDB，不上传 RAGFlow
-
-# download_ncit.py — 下载 NCIT 医疗术语
+# 子命令
+python scripts/weaveeye_sync.py sims --hours 24 --factory kunshan
+python scripts/weaveeye_sync.py mes --sync-recent 1
 ```
+详见 `scripts/README.md`。
 
 ## Architecture
 
@@ -82,13 +78,13 @@ app/
 │   ├── factories.py           # GET /api/factories (从 YAML 读取厂区列表)
 │   ├── knowledge_base.py     # CRUD /api/knowledge-base/documents (本地 + RAGFlow)
 │   ├── settings.py            # GET/PUT /api/settings (MongoDB app_settings)
-│   └── sync.py                # POST /api/sync/trigger, GET /servers, /jobs, /status
+│   └── sync.py                # GET /api/sync/servers*（MES 实时查询，只读）
 ├── services/
 │   ├── llm_service.py         # OpenAI/Gemini LLM 调用封装 (含 mock 模式)
 │   ├── ragflow_service.py     # RAGFlow API 封装 (数据集/文档/聊天助手 CRUD)
 │   ├── knowledge_graph.py     # 知识图谱检索 (case_library, devices, error_logs, maintenance)
 │   ├── analytics_service.py   # 看板数据后台预计算 + 快照缓存 (每小时调度)
-│   └── sync_service.py        # 三方数据同步 (MES API → MongoDB)
+│   └── mes_direct_service.py  # MES/SIMS 实时 HTTP 查询
 ├── models/
 │   ├── auth.py                # 认证请求/响应 Pydantic 模型
 │   ├── request.py             # 通用请求模型
@@ -141,7 +137,8 @@ src/
                       ├── /api/analytics/* → analytics_service (预计算快照) → MongoDB
                       ├── /api/knowledge-base/* → 本地文件 + RAGFlow API
                       ├── /api/settings/* → MongoDB.app_settings
-                      ├── /api/sync/* → 三方 MES API → MongoDB (sync_* collections)
+                      ├── /api/sync/servers* → MES 实时查询
+                      ├── scripts/weaveeye_sync.py → MongoDB (sync_* collections)
                       ├── /api/factories/* → configs/factories.yaml
                       └── /api/error-logs/* → (当前为 mock 数据)
 ```
@@ -160,7 +157,7 @@ src/
 | `sync_remote_servers` | `factory_id`+`server_sn` (unique), `server_sn`, `product_models` | 远程服务器列表 |
 | `sync_remote_test_details` | `factory_id`+`server_sn`+`test_time`, `factory_id`+`server_id`+`detailed_flow`+`test_time` | 远程测试明细 |
 | `factory_sites` | `factory_id` (unique) | 厂区站点 (从 YAML seed) |
-| `auto_sync_configs` | `factory_id` | 自动同步配置 |
+| `auto_sync_configs` | `factory_id` | （遗留）原 API 内自动同步配置，现由外部 cron + `weaveeye_sync.py` |
 | `knowledge_documents` | `uploaded_at`, `title` | 知识库文档元数据 |
 | `analytics_snapshots` | `computed_at` | 看板预计算结果缓存 |
 | `diagnosis_cache` | `error_log_id` (unique) | 诊断缓存 |
@@ -174,6 +171,6 @@ src/
 - **看板缓存**: `analytics_service.py` 每小时后台预计算看板聚合数据写入 MongoDB 快照，前端直接读取避免实时聚合压力
 - **MongoDB 关联策略**: 紧耦合的 1:1 关系用嵌入文档，独立查询的 1:N 用 `_id` 引用
 - **认证**: 本地 JWT 验证（`python-jose` 直接解码），无需每次请求调用外部服务
-- **同步服务**: 使用 `asyncio.Lock` 防止并发同步；`asyncio.Semaphore` 控制三方 API 并发；1 小时 `asyncio.wait_for` 超时保护
+- **数据同步**: 独立脚本 `scripts/weaveeye_sync.py`，由 crontab/运维机定期执行，API 不触发写入
 - **ObjectId 处理**: 所有 MongoDB 自动生成的 `_id` 在 API 响应中转为字符串 `id` 字段
 - **async/await**: 全链路异步 — Motor 驱动 + httpx.AsyncClient，无同步阻塞

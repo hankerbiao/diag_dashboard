@@ -1,89 +1,21 @@
 """
-数据同步路由 - 查询已同步数据，触发同步
-数据写入由独立脚本 (scripts/sync_data.py) 完成
+MES / SIMS 实时查询路由（只读）
+
+历史测试数据写入 MongoDB 由仓库根目录 `scripts/weaveeye_sync.py` 独立执行，
+不在 API 进程内触发同步或调度。
 """
-import asyncio
 import logging
-import os
-from ..core.utils import utc_now, utc_now_iso
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 
 from ..core.auth import get_current_user
-from ..core.mongodb import get_collection
-from ..models.request import AutoSyncConfigUpdateRequest
 from ..models.api import ApiResponse
-from ..services.sync_service import get_sync_service
 from ..services.mes_direct_service import MESDirectService
-from ..services.sync_scheduler_service import get_sync_scheduler_service, execute_sync_script
-from bson import ObjectId
-from bson.errors import InvalidId
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/sync", tags=["数据同步"])
-
-_sync_lock = asyncio.Lock()
-
-_SCRIPTS_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts")
-)
-
-
-@router.post("/trigger", response_model=ApiResponse)
-async def trigger_sync(
-    factory: Optional[str] = Query(None, description="指定厂区，不传则全部同步"),
-    current_user: dict = Depends(get_current_user),
-):
-    """触发数据同步（调用 sync_data.py 脚本）"""
-    if _sync_lock.locked():
-        return ApiResponse(success=False, error="已有同步任务正在进行中")
-
-    async with _sync_lock:
-        try:
-            cmd = ["python", f"{_SCRIPTS_DIR}/sync_data.py"]
-            if factory:
-                cmd.extend(["--factory", factory])
-
-            # 记录同步任务
-            col = get_collection("sync_jobs")
-            job = {
-                "factory_id": factory or "all",
-                "sync_type": "sims",
-                "status": "running",
-                "started_at": utc_now_iso(),
-                "triggered_by": current_user.get("email", current_user["id"]),
-            }
-            result = await col.insert_one(job)
-            job_id = str(result.inserted_id)
-
-            # 异步执行同步（不阻塞响应，进度实时写入 MongoDB）
-            async def _run_and_track():
-                status = await execute_sync_script(cmd, job_id)
-                if status == "completed":
-                    now = utc_now()
-                    if factory:
-                        await get_collection("auto_sync_configs").update_one(
-                            {"factory_id": factory},
-                            {"$set": {"last_run_at": now}},
-                        )
-                    else:
-                        await get_collection("auto_sync_configs").update_many(
-                            {"factory_id": {"$ne": "__mes__"}},
-                            {"$set": {"last_run_at": now}},
-                        )
-            asyncio.create_task(_run_and_track())
-
-            return ApiResponse(
-                success=True,
-                data={"job_id": job_id, "status": "running"},
-                message=f"同步任务已启动{f'（厂区: {factory}）' if factory else ''}",
-            )
-
-        except Exception as e:
-            logger.error("Trigger sync failed: %s", e)
-            raise HTTPException(status_code=500, detail=str(e))
+router = APIRouter(prefix="/sync", tags=["MES 实时查询"])
 
 
 @router.get("/servers")
@@ -93,7 +25,7 @@ async def get_servers(
     search_product_models: Optional[str] = Query(None, description="产品型号模糊搜索"),
     page: int = Query(1, ge=1, description="页码"),
     limit: int = Query(20, ge=1, le=100, description="每页数量"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """查询服务器列表（实时从 MES API 获取）"""
     if not factory_id:
@@ -123,10 +55,10 @@ async def get_servers(
 @router.get("/servers/{server_sn}/test-details")
 async def get_test_details(
     server_sn: str,
-    factory_id: Optional[str] = Query(None, description="厂区标识，不传则查全部"),
+    factory_id: Optional[str] = Query(None, description="厂区标识"),
     page: int = Query(1, ge=1, description="页码"),
     limit: int = Query(20, ge=1, le=500, description="每页数量"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """查询某服务器的测试详情（实时从 MES API 获取，支持分页）"""
     if not factory_id:
@@ -149,62 +81,3 @@ async def get_test_details(
     except Exception as e:
         logger.exception("MES 测试详情查询失败")
         return ApiResponse(success=False, error=f"MES API 查询失败: {e}")
-
-
-@router.get("/jobs/{job_id}", response_model=ApiResponse)
-async def get_job_detail(job_id: str, current_user: dict = Depends(get_current_user)):
-    """查询单个同步任务详情（含实时进度）"""
-    col = get_collection("sync_jobs")
-    try:
-        doc = await col.find_one({"_id": ObjectId(job_id)})
-    except InvalidId:
-        return ApiResponse(success=False, error="无效的任务 ID")
-    if not doc:
-        return ApiResponse(success=False, error="任务不存在")
-    doc["id"] = str(doc.pop("_id"))
-    return ApiResponse(success=True, data=doc)
-
-
-@router.get("/jobs")
-async def get_jobs(
-    factory_id: Optional[str] = Query(None, description="厂区标识，不传则查全部"),
-    page: int = Query(1, ge=1, description="页码"),
-    limit: int = Query(5, ge=1, le=20, description="每页数量"),
-    current_user: dict = Depends(get_current_user)
-):
-    """查询同步历史记录"""
-    svc = get_sync_service()
-    result = await svc.get_jobs(factory_id=factory_id, page=page, limit=limit)
-    return ApiResponse(success=True, data=result)
-
-
-# ── 自动同步配置 ──
-
-
-@router.get("/auto-config", response_model=ApiResponse)
-async def get_auto_sync_config(current_user: dict = Depends(get_current_user)):
-    """获取自动同步配置（SIMS + MES）"""
-    svc = get_sync_scheduler_service()
-    config = await svc.get_configs()
-    return ApiResponse(success=True, data=config)
-
-
-@router.put("/auto-config", response_model=ApiResponse)
-async def update_auto_sync_config(
-    request: AutoSyncConfigUpdateRequest,
-    current_user: dict = Depends(get_current_user),
-):
-    """更新自动同步配置"""
-    svc = get_sync_scheduler_service()
-    result = await svc.update_config(request)
-    return ApiResponse(success=True, data=result, message="自动同步配置已更新")
-
-
-@router.post("/trigger-mes", response_model=ApiResponse)
-async def trigger_mes_sync(
-    current_user: dict = Depends(get_current_user),
-):
-    """手动触发 MES 维修数据同步"""
-    svc = get_sync_scheduler_service()
-    result = await svc.trigger_mes_now()
-    return ApiResponse(success=True, data=result, message="MES 同步任务已启动")
