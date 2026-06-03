@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 
 from ..core.auth import get_current_user
 from ..core.factory_config import get_factory_by_id, load_factories_from_yaml
+from ..core.mongodb import get_collection
 from ..models.request import (
     DiagnosisBySNRequest,
     DiagnosisFollowUpRequest,
