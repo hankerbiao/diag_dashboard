@@ -9,6 +9,8 @@ import AnalysisModal from './AnalysisModal';
 import ServerDetailModal from './ServerDetailModal';
 import BatchTestCharts from './charts/BatchTestCharts';
 import SupportHint from '../common/SupportHint';
+import { buildYieldTrendFromDaily } from './utils/buildYieldTrend';
+import type { DailyStatItem } from '../../api/analytics';
 
 interface ErrorLogsTabProps {
   factory: string;
@@ -60,9 +62,10 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
   // 分析看板
   const [insights, setInsights] = useState<DashboardInsights | null>(null);
   const [insightsLoading, setInsightsLoading] = useState(false);
+  const [dailyStats, setDailyStats] = useState<DailyStatItem[]>([]);
   const [trend, setTrend] = useState<'day' | 'week' | 'month'>('day');
 
-  const loadInsights = useCallback(async (_granularity: string) => {
+  const loadInsights = useCallback(async () => {
     setInsightsLoading(true);
     try {
       const [summaryRes, dailyRes] = await Promise.all([
@@ -73,19 +76,7 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
       if (summaryRes.success && summaryRes.data) {
         const summary = summaryRes.data;
         const daily = dailyRes.success ? dailyRes.data?.items ?? [] : [];
-
-        // 从每日数据构建良率趋势数据
-        const yieldTrend = daily
-          .map((d) => ({
-            date: d.date,
-            total: d.stats.total,
-            passed: d.stats.passed,
-            failed: d.stats.failed,
-            yield: d.stats.total > 0
-              ? Number(((d.stats.passed / d.stats.total) * 100).toFixed(1))
-              : 0,
-          }))
-          .sort((a, b) => a.date.localeCompare(b.date));
+        setDailyStats(daily);
 
         setInsights({
           fault_categories: summary.fault_categories,
@@ -93,7 +84,7 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
           station_failures: summary.station_failures,
           decision_distribution: summary.decision_distribution,
           model_defects: summary.model_defects,
-          yield_trend: yieldTrend.reverse(), // 最新日期在前
+          yield_trend: buildYieldTrendFromDaily(daily, trend),
         });
       }
     } finally {
@@ -101,10 +92,17 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
     }
   }, [factory]);
 
-  // factory 切换或趋势切换时重新加载
   useEffect(() => {
-    loadInsights(trend);
-  }, [loadInsights, trend]);
+    void loadInsights();
+  }, [loadInsights]);
+
+  // 切换日/周/月：用已缓存的每日数据重算良率，不重复请求接口
+  useEffect(() => {
+    if (dailyStats.length === 0) return;
+    setInsights((prev) =>
+      prev ? { ...prev, yield_trend: buildYieldTrendFromDaily(dailyStats, trend) } : prev,
+    );
+  }, [trend, dailyStats]);
 
   const handleTrendChange = (g: 'day' | 'week' | 'month') => {
     setTrend(g);
