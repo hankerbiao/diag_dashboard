@@ -23,10 +23,12 @@ env/
 *.swo
 *~
 
-# macOS
+# macOS (match any directory)
 .DS_Store
+**/.DS_Store
 .DS_Store?
 ._*
+**/._*
 
 # Scripts specific
 scripts/.ruff_cache/
