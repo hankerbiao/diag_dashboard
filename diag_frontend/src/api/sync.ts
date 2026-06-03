@@ -5,7 +5,7 @@ export const factoryApi = {
   async list() { return fetchApi<FactorySite[]>('/api/factories'); },
 };
 
-/** MES 实时查询 + 厂区列表；历史数据同步见 scripts/weaveeye_sync.py */
+/** MES 实时查询（非历史同步数据） */
 export const syncApi = {
   async getServers(params: { factory_id?: string; search_sn?: string; search_product_models?: string; page?: number; limit?: number }) {
     const query = new URLSearchParams();

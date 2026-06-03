@@ -14,13 +14,6 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
-    # AI Providers
-    openai_api_key: str = ""
-    openai_api_url: str = ""
-    ai_model: str = "gpt-4-turbo"
-    ai_temperature: float = 0.7
-    gemini_api_key: str = ""
-
     # Server
     host: str = "0.0.0.0"
     port: int = 8000

@@ -62,21 +62,6 @@ export interface SyncTestDetail {
 
 export interface PaginatedResponse<T> { items: T[]; total: number; page: number; limit: number; }
 
-export interface AutoSyncFactoryConfig {
-  factory_id: string; enabled: boolean; interval_minutes: number;
-  cutoff_hours: number | null; last_run_at: string | null;
-}
-
-export interface AutoSyncConfig {
-  sims: { enabled: boolean; interval_minutes: number; factories: AutoSyncFactoryConfig[] };
-  mes: { enabled: boolean; interval_minutes: number; cutoff_hours: number | null; last_run_at: string | null };
-}
-
-export interface SyncJobItem {
-  id: string; factory_id: string; sync_type: string; status: string;
-  started_at: string; completed_at?: string; triggered_by: string; output?: string; error?: string;
-}
-
 export interface FaultCategoryItem { name: string; count: number; }
 export interface YieldTrendItem { date: string; total: number; passed: number; failed: number; yield: number; }
 export interface StationFailureItem { station: string; count: number; }

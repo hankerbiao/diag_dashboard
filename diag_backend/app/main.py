@@ -4,14 +4,13 @@ from fastapi.responses import JSONResponse
 import logging
 
 from .routers import (
-    analytics,
+    analytics_v2,
+    auth,
     diagnosis,
-    error_logs,
     factories,
     knowledge_base,
     settings as settings_router,
     sync,
-    auth,
 )
 from .core.config import get_settings
 from .core.logger import setup_logging
@@ -73,9 +72,8 @@ async def health_check():
 # 注册路由
 app.include_router(auth.router, prefix="/api")
 app.include_router(diagnosis.router, prefix="/api")
-app.include_router(error_logs.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
-app.include_router(analytics.router, prefix="/api")
+app.include_router(analytics_v2.router, prefix="/api")
 app.include_router(sync.router, prefix="/api")
 app.include_router(factories.router, prefix="/api")
 app.include_router(knowledge_base.router, prefix="/api")

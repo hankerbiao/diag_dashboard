@@ -48,14 +48,33 @@ import requests, httpx
 from pymongo import MongoClient
 from tqdm import tqdm
 
-# 导入统一日志模块
-from sync_logger import (
-    setup_logger, log_sync_start, log_sync_complete, log_sync_error,
-    log_api_call, log_step, log_data_stats, log_warning, log_debug, TRACE_ID
-)
+# ── 日志 ──────────────────────────────────────────────
+import logging
+import uuid
 
-# 初始化日志
-logger = setup_logger("sync_mes")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("sync_mes")
+TRACE_ID = uuid.uuid4().hex[:12]
+
+
+def _log_extra(msg: str, **kwargs) -> str:
+    extras = " ".join(f"{k}={v}" for k, v in kwargs.items() if v is not None)
+    return f"{msg} ({extras})" if extras else msg
+
+
+def log_sync_start(_id: str, **kw): logger.info(_log_extra(f"▶ {_id}", **kw))
+def log_sync_complete(_id: str, duration_ms: float = 0, **kw): logger.info(_log_extra(f"✓ {_id} ({duration_ms:.0f}ms)", **kw))
+def log_sync_error(_id: str, error: str = "", **kw): logger.error(_log_extra(f"✗ {_id}", error=error, **kw))
+def log_api_call(url: str, method: str, status_code: int = 0, count: int = 0, duration_ms: float = 0, error: str = ""):
+    logger.info(f"{method} {url} → {status_code} ({count}条, {duration_ms:.0f}ms{', ' + error if error else ''})")
+def log_step(label: str, detail: str = "", *_a, **_kw): logger.info(f"  [{label}] {detail}")
+def log_data_stats(**kw): logger.info(f"数据统计: {' '.join(f'{k}={v}' for k,v in kw.items())}")
+def log_warning(msg: str, **kw): logger.warning(_log_extra(msg, **kw))
+def log_debug(msg: str, **kw): logger.debug(_log_extra(msg, **kw))
 
 # 脚本标识
 SCRIPT_NAME = "sync_mes"

@@ -52,7 +52,7 @@ class LLMService:
     # ------------------------------------------------------------------
 
     async def _load_config_from_db(self) -> dict:
-        """从 MongoDB 加载 AI 配置，不存在时回退到环境变量"""
+        """从 MongoDB 加载 AI 配置"""
         try:
             from ..core.mongodb import get_collection
             col = get_collection("global_app_config")
@@ -66,15 +66,7 @@ class LLMService:
                 }
         except Exception:
             pass
-
-        from ..core.config import get_settings
-        s = get_settings()
-        return {
-            "api_key": s.openai_api_key or "",
-            "base_url": s.openai_api_url or "https://api.openai.com/v1",
-            "model": s.ai_model or "gpt-4-turbo",
-            "temperature": s.ai_temperature or 0.7,
-        }
+        return {"api_key": "", "base_url": "", "model": "gpt-4-turbo", "temperature": 0.7}
 
     async def _ensure_configured(self):
         """懒加载配置（仅在无预设客户端时执行一次）"""

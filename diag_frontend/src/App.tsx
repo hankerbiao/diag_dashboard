@@ -25,11 +25,9 @@ function AppContent() {
         setFactorySites(resp.data);
         const firstFactory = resp.data[0].factory_id;
         setFactory(firstFactory);
-        // 预热分析看板（带上厂区ID）
-        const trends = ['day', 'week', 'month'] as const;
-        trends.forEach((trend) => {
-          analyticsApi.getInsights({ factory_id: firstFactory, days: 30, trend }).catch(() => {});
-        });
+        // 预热分析看板（预计算统计）
+        analyticsApi.getSummary({ factory_id: firstFactory, days: 30 }).catch(() => {});
+        analyticsApi.getDailyStats({ factory_id: firstFactory, days: 30 }).catch(() => {});
       }
     });
   }, []);

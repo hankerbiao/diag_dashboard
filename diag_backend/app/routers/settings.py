@@ -40,19 +40,17 @@ async def get_global_ai_config(current_user: dict = Depends(get_current_user)):
                 }
             )
 
-        # 回退到环境变量默认值
-        from ..core.config import get_settings
-        s = get_settings()
+        # 数据库无配置时返回空配置
         return ApiResponse(
             success=True,
             data={
-                "api_key": _mask_api_key(s.openai_api_key or ""),
-                "base_url": s.openai_api_url or "https://api.openai.com/v1",
-                "model": s.ai_model or "gpt-4-turbo",
-                "temperature": s.ai_temperature or 0.7,
+                "api_key": "",
+                "base_url": "",
+                "model": "",
+                "temperature": 0.7,
                 "provider": "openai",
                 "updated_at": "",
-                "updated_by": "system",
+                "updated_by": "",
             }
         )
 

@@ -4,7 +4,7 @@ export { getAccessToken } from './auth';
 export type {
   TestLogItem, SimilarCaseItem, DiagnosisResult, SnHistoryItem, SnHistoryDetail,
   ErrorAnalysis, DiagnosisCache, FactorySite, SyncServer, SyncTestDetail,
-  PaginatedResponse, AutoSyncFactoryConfig, AutoSyncConfig, SyncJobItem,
+  PaginatedResponse,
   FaultCategoryItem, YieldTrendItem, StationFailureItem, DecisionDistributionItem,
   ModelDefectItem, DashboardInsights, KnowledgeDoc, GlobalAiConfig
 } from './types';

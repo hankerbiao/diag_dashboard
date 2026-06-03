@@ -10,18 +10,6 @@ from .factory_config import load_factories_from_yaml
 
 logger = logging.getLogger(__name__)
 
-SNAPSHOT_COLLECTION = "analytics_snapshots"
-
-
-async def _ensure_sync_server_sn_index(db: AsyncIOMotorDatabase) -> None:
-    """Ensure server_sn index is non-unique; only drop legacy unique index when needed."""
-    col = db["sync_remote_servers"]
-    indexes = await col.index_information()
-    existing = indexes.get("idx_sync_servers_sn")
-    if existing and existing.get("unique"):
-        logger.info("Migrating idx_sync_servers_sn: dropping legacy unique index")
-        await col.drop_index("idx_sync_servers_sn")
-    await col.create_index("server_sn", name="idx_sync_servers_sn")
 
 
 async def ensure_indexes(db: AsyncIOMotorDatabase):
@@ -52,55 +40,8 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
         [("root_cause", "text")], name="idx_case_library_root_cause_text"
     )
 
-    # ---- sync_jobs ----
-    await db["sync_jobs"].create_index(
-        [("factory_id", 1), ("started_at", -1)], name="idx_sync_jobs_factory_started"
-    )
-    await db["sync_jobs"].create_index(
-        [("status", 1), ("started_at", -1)], name="idx_sync_jobs_status_started"
-    )
-    await db["sync_jobs"].create_index("started_at", name="idx_sync_jobs_started_at")
-
-    # ---- sync_remote_servers ----
-    await _ensure_sync_server_sn_index(db)
-    await db["sync_remote_servers"].create_index(
-        [("factory_id", 1), ("server_sn", 1)], unique=True, name="idx_sync_servers_factory_sn"
-    )
-    await db["sync_remote_servers"].create_index("synced_at", name="idx_sync_servers_synced_at")
-    await db["sync_remote_servers"].create_index(
-        "product_models", name="idx_sync_servers_product_models"
-    )
-
-    # ---- sync_remote_test_details ----
-    await db["sync_remote_test_details"].create_index(
-        [("factory_id", 1), ("server_id", 1), ("detailed_flow", 1), ("test_time", 1)],
-        name="idx_sync_details_factory_server_flow_time"
-    )
-    await db["sync_remote_test_details"].create_index(
-        [("factory_id", 1), ("server_sn", 1), ("test_time", -1)], name="idx_sync_details_factory_sn_time"
-    )
-
-    # ---- analytics 聚合索引 ----
-    await db["sync_remote_test_details"].create_index(
-        [("test_time", -1)], name="idx_analytics_test_time"
-    )
-    await db["sync_remote_test_details"].create_index(
-        [("fault_type1", 1), ("test_time", 1)], name="idx_analytics_fault_type1_time"
-    )
-    await db["sync_remote_test_details"].create_index(
-        [("server_test_result", 1), ("test_time", 1)], name="idx_analytics_result_time"
-    )
-    await db["sync_remote_test_details"].create_index(
-        [("detailed_flow", 1), ("server_test_result", 1)], name="idx_analytics_flow_result"
-    )
-
     # ---- factory_sites ----
     await db["factory_sites"].create_index("factory_id", unique=True, name="idx_factory_sites_id")
-
-    # ---- auto_sync_configs ----
-    await db[SNAPSHOT_COLLECTION].create_index(
-        "computed_at", name="idx_analytics_snapshots_computed"
-    )
 
     # ---- diagnosis_cache ----
     await db["diagnosis_cache"].create_index(
@@ -126,6 +67,18 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
         "title", name="idx_knowledge_docs_title"
     )
 
+    # ---- test_stats_daily (预计算统计摘要) ----
+    await db["test_stats_daily"].create_index(
+        [("factory_id", 1), ("date", -1)],
+        name="idx_stats_daily_factory_date",
+    )
+    # ---- _computed_meta (增量计算进度追踪) ----
+    await db["_computed_meta"].create_index(
+        [("collection", 1), ("factory_id", 1)],
+        name="idx_computed_meta_collection_factory",
+        unique=True,
+    )
+
     # ---- global_app_config ----
     await db["global_app_config"].create_index("_id", name="idx_global_config_id")
 
@@ -133,7 +86,7 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
 
 
 async def seed_default_data(db: AsyncIOMotorDatabase):
-    """首次部署时写入默认厂区等种子数据（幂等）。数据同步见 scripts/weaveeye_sync.py。"""
+    """首次部署时写入默认厂区等种子数据（幂等）。"""
     now = utc_now_iso()
 
     # 从 YAML 配置读取厂区列表（单一数据源）
@@ -157,17 +110,15 @@ async def seed_default_data(db: AsyncIOMotorDatabase):
 
 
 async def seed_global_ai_config(db: AsyncIOMotorDatabase):
-    """从环境变量播种全局 AI 配置（首次部署时）"""
-    from .config import get_settings
-    env_settings = get_settings()
+    """播种全局 AI 配置（首次部署时插入空配置，由前端配置）"""
     await db["global_app_config"].update_one(
         {"_id": "ai_config"},
         {"$setOnInsert": {
             "_id": "ai_config",
-            "api_key": env_settings.openai_api_key or "",
-            "base_url": env_settings.openai_api_url or "https://api.openai.com/v1",
-            "model": env_settings.ai_model or "gpt-4-turbo",
-            "temperature": env_settings.ai_temperature or 0.7,
+            "api_key": "",
+            "base_url": "",
+            "model": "gpt-4-turbo",
+            "temperature": 0.7,
             "provider": "openai",
             "updated_by": "system",
             "updated_at": utc_now_iso(),

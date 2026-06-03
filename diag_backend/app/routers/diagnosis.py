@@ -12,12 +12,10 @@ from ..core.utils import (
 from typing import Awaitable, Callable, Optional
 
 import httpx
-from bson import ObjectId
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from ..core.auth import get_current_user
-from ..core.mongodb import get_collection
 from ..core.factory_config import get_factory_by_id, load_factories_from_yaml
 from ..models.request import (
     DiagnosisBySNRequest,
@@ -466,21 +464,6 @@ async def analyze_error_log(
 # ── 辅助函数 ──
 
 
-def _detail_from_sync_doc(doc: dict, *, client_id: Optional[str] = None) -> dict:
-    return {
-        "id": client_id or str(doc["_id"]),
-        "sn": doc.get("server_sn", ""),
-        "factory_id": doc.get("factory_id", ""),
-        "test_item": doc.get("detailed_flow", doc.get("big_flow", "")),
-        "test_time": doc.get("test_time", ""),
-        "fail_details": doc.get("server_test_result", ""),
-        "fault_type1": doc.get("fault_type1", ""),
-        "fault_type2": doc.get("fault_type2", ""),
-        "fault_type3": doc.get("fault_type3", ""),
-        "log_path": doc.get("log_path", ""),
-    }
-
-
 def _detail_from_analyze_context(error_log_id: str, ctx: ErrorLogAnalyzeContext) -> dict:
     return {
         "id": error_log_id,
@@ -576,28 +559,9 @@ async def _get_error_log_detail(
     if context and context.server_sn and context.factory_id:
         return _detail_from_analyze_context(error_log_id, context)
 
-    col = get_collection("sync_remote_test_details")
-    try:
-        doc = await col.find_one({"_id": ObjectId(error_log_id)})
-        if doc:
-            return _detail_from_sync_doc(doc)
-    except Exception:
-        pass
-
+    # 尝试通过 ID 模式从 MES 实时查询
     parsed = _parse_mes_client_detail_id(error_log_id)
     if parsed:
-        try:
-            doc = await col.find_one(
-                {
-                    "factory_id": parsed["factory_id"],
-                    "server_sn": parsed["server_sn"],
-                    "test_time": parsed["test_time"],
-                }
-            )
-            if doc:
-                return _detail_from_sync_doc(doc, client_id=error_log_id)
-        except Exception:
-            pass
         try:
             mes_detail = await _lookup_test_detail_from_mes(parsed, error_log_id)
             if mes_detail:

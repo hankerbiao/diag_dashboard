@@ -62,12 +62,39 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
   const [insightsLoading, setInsightsLoading] = useState(false);
   const [trend, setTrend] = useState<'day' | 'week' | 'month'>('day');
 
-  const loadInsights = useCallback(async (granularity: string) => {
+  const loadInsights = useCallback(async (_granularity: string) => {
     setInsightsLoading(true);
     try {
-      const res = await analyticsApi.getInsights({ factory_id: factory, days: 30, trend: granularity });
-      if (res.success && res.data) {
-        setInsights(res.data);
+      const [summaryRes, dailyRes] = await Promise.all([
+        analyticsApi.getSummary({ factory_id: factory, days: 30 }),
+        analyticsApi.getDailyStats({ factory_id: factory, days: 30 }),
+      ]);
+
+      if (summaryRes.success && summaryRes.data) {
+        const summary = summaryRes.data;
+        const daily = dailyRes.success ? dailyRes.data?.items ?? [] : [];
+
+        // 从每日数据构建良率趋势数据
+        const yieldTrend = daily
+          .map((d) => ({
+            date: d.date,
+            total: d.stats.total,
+            passed: d.stats.passed,
+            failed: d.stats.failed,
+            yield: d.stats.total > 0
+              ? Number(((d.stats.passed / d.stats.total) * 100).toFixed(1))
+              : 0,
+          }))
+          .sort((a, b) => a.date.localeCompare(b.date));
+
+        setInsights({
+          fault_categories: summary.fault_categories,
+          fault_subcategories: summary.fault_subcategories,
+          station_failures: summary.station_failures,
+          decision_distribution: summary.decision_distribution,
+          model_defects: summary.model_defects,
+          yield_trend: yieldTrend.reverse(), // 最新日期在前
+        });
       }
     } finally {
       setInsightsLoading(false);
