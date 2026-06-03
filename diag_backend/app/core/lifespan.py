@@ -28,13 +28,6 @@ async def app_lifespan(app: FastAPI):
     analytics_service.start()
     logger.info("分析看板调度器已启动", extra={"event": "analytics_scheduler_started"})
 
-    # startup: 启动数据同步调度器 (SIMS + MES)
-    logger.info("启动数据同步调度器...")
-    from ..services.sync_scheduler_service import get_sync_scheduler_service
-    sync_scheduler = get_sync_scheduler_service()
-    sync_scheduler.start_scheduler()
-    logger.info("数据同步调度器已启动", extra={"event": "sync_scheduler_started"})
-
     logger.info("=" * 60, extra={"event": "app_ready"})
     logger.info("WeaveEye API 服务启动完成 ✓")
 
@@ -42,8 +35,6 @@ async def app_lifespan(app: FastAPI):
 
     # shutdown
     logger.info("正在关闭服务...")
-    logger.info("停止数据同步调度器...")
-    await sync_scheduler.stop_scheduler()
     logger.info("停止分析看板调度器...")
     await analytics_service.stop()
     logger.info("关闭 MongoDB 连接...")

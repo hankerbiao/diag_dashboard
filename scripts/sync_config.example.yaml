@@ -1,0 +1,30 @@
+# WeaveEye 独立数据同步配置
+# 复制为 sync_config.yaml 后按需修改：
+#   cp scripts/sync_config.example.yaml scripts/sync_config.yaml
+#
+# 一键执行：
+#   python scripts/weaveeye_sync.py run
+#   python scripts/weaveeye_sync.py run -c scripts/sync_config.yaml
+#
+# 定时任务示例（每小时）：
+#   0 * * * * cd /path/to/diag_ai_analysis && /path/to/venv/bin/python scripts/weaveeye_sync.py run >> /var/log/weaveeye-sync.log 2>&1
+
+mongodb:
+  # 也可用环境变量 MONGODB_URI / MONGODB_DB_NAME（优先于本文件）
+  uri: mongodb://localhost:27017
+  db_name: diag_analysis
+
+# 厂区 MES 地址（与后端共用）
+factories_yaml: diag_backend/configs/factories.yaml
+
+# SIMS 测试数据 → sync_remote_servers / sync_remote_test_details
+sims:
+  enabled: true
+  hours: 24          # 0 = 全量
+  factories: []      # 空列表 = factories.yaml 中全部厂区；或 ["kunshan", "tianjin2"]
+  dry_run: false
+
+# MES 维修记录 → maintenance_records（可选上传 RAGFlow，见 sync_mes.py 内配置）
+mes:
+  enabled: true
+  sync_recent_days: 1   # 对应 sync_mes.py --sync-recent N

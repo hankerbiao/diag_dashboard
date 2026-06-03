@@ -2,7 +2,7 @@ import { useRef, useState, useCallback } from 'react';
 import { CheckCircle2, AlertCircle, BookOpen } from 'lucide-react';
 import ApiConfig from './ApiConfig';
 import type { ApiConfigHandle } from './ApiConfig';
-import SyncManagement from './SyncManagement';
+import ExternalSyncNotice from './ExternalSyncNotice';
 import GuideModal from '../guide/GuideModal';
 import SupportHint from '../common/SupportHint';
 
@@ -39,7 +39,7 @@ export default function SettingsTab() {
       style={{ backgroundColor: 'var(--color-bg-primary)' }}
     >
       <div className="w-full max-w-4xl space-y-8 pb-12">
-        <SyncManagement />
+        <ExternalSyncNotice />
         <ApiConfig ref={apiConfigRef} />
 
         <section

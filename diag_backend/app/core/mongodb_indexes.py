@@ -133,7 +133,7 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
 
 
 async def seed_default_data(db: AsyncIOMotorDatabase):
-    """首次部署时写入默认厂区和自动同步配置（幂等）"""
+    """首次部署时写入默认厂区等种子数据（幂等）。数据同步见 scripts/weaveeye_sync.py。"""
     now = utc_now_iso()
 
     # 从 YAML 配置读取厂区列表（单一数据源）
@@ -149,36 +149,6 @@ async def seed_default_data(db: AsyncIOMotorDatabase):
             {"$setOnInsert": {**site, "created_at": now, "updated_at": now}},
             upsert=True
         )
-
-    # 为每个厂区创建默认自动同步配置
-    for site in factories:
-        await db["auto_sync_configs"].update_one(
-            {"factory_id": site["factory_id"]},
-            {"$setOnInsert": {
-                "factory_id": site["factory_id"],
-                "enabled": False,
-                "interval_minutes": 60,
-                "cutoff_hours": None,
-                "last_run_at": None,
-                "updated_at": now,
-            }},
-            upsert=True
-        )
-
-    # Seed MES global auto-sync config
-    await db["auto_sync_configs"].update_one(
-        {"factory_id": "__mes__"},
-        {"$setOnInsert": {
-            "factory_id": "__mes__",
-            "sync_type": "mes",
-            "enabled": False,
-            "interval_minutes": 1440,
-            "cutoff_hours": 24,
-            "last_run_at": None,
-            "updated_at": now,
-        }},
-        upsert=True,
-    )
 
     # Seed global AI config from environment variables (first deploy only)
     await seed_global_ai_config(db)

@@ -100,6 +100,9 @@ diag_ai_analysis/
 │   ├── deployment/            # 部署指南
 │   └── design/                # 设计文档
 │
+├── docker/                    # docker compose up -d
+├── deploy/                    # 部署与配置说明
+├── Makefile                   # make up → docker/
 ├── CLAUDE.md                  # Claude Code 指导文件
 └── README.md                  # 项目总览 (本文件)
 ```
@@ -162,7 +165,23 @@ npm run dev
 
 访问地址: http://localhost:3000
 
-### 4. 文档站 (可选)
+### 4. Docker Compose（内网一键部署）
+
+```bash
+cd docker
+cp .env.example .env
+# 编辑 .env 后
+docker compose up -d --build
+```
+
+| 服务 | 默认地址 |
+|------|----------|
+| 前端 | http://localhost:3000 |
+| API | http://localhost:8000 |
+
+详见 [docker/README.md](docker/README.md)、[deploy/README.md](deploy/README.md)。
+
+### 5. 文档站 (可选)
 
 ```bash
 cd docs
