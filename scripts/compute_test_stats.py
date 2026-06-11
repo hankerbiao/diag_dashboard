@@ -20,6 +20,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlencode
 
+import multiprocessing as mp
+
 import requests
 import yaml
 
@@ -248,9 +250,12 @@ def compute_factory(client: MESClient, stats_col, meta_col,
     logger.info("[%s] %d 台服务器，%d 台有型号", fid, len(raw_servers), len(server_models))
 
     day_buckets: dict[str, list] = defaultdict(list)
-    for srv in raw_servers:
+    total_servers = len(raw_servers)
+    for idx, srv in enumerate(raw_servers, 1):
         sn = srv.get("serverSN", "")
         if not sn: continue
+        if idx % 50 == 0 or idx == total_servers:
+            logger.debug("[%s] 服务器进度 %d/%d", fid, idx, total_servers)
         try:
             details, mt = client.fetch_test_details(sn, since)
             if not details: skipped += 1; continue
@@ -290,6 +295,37 @@ def compute_factory(client: MESClient, stats_col, meta_col,
     return {"days": total_days, "records": total_records, "skipped": skipped}
 
 
+# ─── 多进程 Worker ──────────────────────────────────────────
+
+
+def _compute_one_factory(args: tuple) -> dict:
+    """在子进程中计算单个厂区的统计（独立 MongoDB 连接）"""
+    factory, since, mongodb_uri, mongodb_db, dry_run = args
+    fid = factory["factory_id"]
+
+    t0 = time.time()
+    logger.info("[%s] [Worker] 开始处理", fid)
+
+    mongo = MongoClient(mongodb_uri)
+    db = mongo[mongodb_db]
+    meta_col = db["_computed_meta"]
+    stats_col = db["test_stats_daily"]
+    client = MESClient(factory)
+    try:
+        result = compute_factory(client, stats_col, meta_col,
+                                 since=since, dry_run=dry_run)
+        elapsed = time.time() - t0
+        logger.info("[%s] [Worker] 完成 (%.1f 秒): %d 天 / %d 条",
+                     fid, elapsed, result.get("days", 0), result.get("records", 0))
+        return result
+    except Exception as e:
+        logger.exception("[%s] [Worker] 失败: %s", fid, e)
+        return {"days": 0, "records": 0, "skipped": 0}
+    finally:
+        client.close()
+        mongo.close()
+
+
 # ─── CLI ────────────────────────────────────────────────
 
 
@@ -318,26 +354,38 @@ def main():
         since = (datetime.now(timezone.utc) - timedelta(hours=args.hours)).isoformat()
         logger.info("最近 %dh (>= %s)", args.hours, since)
 
-    mongo = MongoClient(args.mongodb_uri); db = mongo[args.mongodb_db]
-    db.command("ping")
-    meta_col, stats_col = db["_computed_meta"], db["test_stats_daily"]
     total_stats = {"days": 0, "records": 0, "skipped": 0}
     start_t = time.time()
 
+    # 预先查询每个厂区的增量起始时间
+    process_args = []
+    mongo = MongoClient(args.mongodb_uri); db = mongo[args.mongodb_db]
     for fc in factories:
         fid = fc["factory_id"]
         ts = since
         if not ts and not args.full:
-            m = meta_col.find_one({"collection": "test_stats_daily", "factory_id": fid})
-            if m and m.get("last_computed_at"): ts = m["last_computed_at"]
-        c = MESClient(fc)
-        try:
-            r = compute_factory(c, stats_col, meta_col, since=ts, dry_run=args.dry_run)
-            for k in total_stats: total_stats[k] += r.get(k, 0)
-        except Exception as e:
-            logger.exception("[%s] 失败: %s", fid, e)
-        finally:
-            c.close()
+            m = db["_computed_meta"].find_one(
+                {"collection": "test_stats_daily", "factory_id": fid}
+            )
+            if m and m.get("last_computed_at"):
+                ts = m["last_computed_at"]
+                logger.debug("[%s] 增量起始: %s", fid, ts)
+        process_args.append((fc, ts, args.mongodb_uri, args.mongodb_db, args.dry_run))
+    mongo.close()
+
+    n_factories = len(process_args)
+    if n_factories == 1:
+        logger.info("单厂区，直接执行")
+        results = [_compute_one_factory(process_args[0])]
+    else:
+        n_workers = min(n_factories, mp.cpu_count())
+        logger.info("多进程并行: %d 个厂区, %d 个工作进程", n_factories, n_workers)
+        with mp.Pool(n_workers) as pool:
+            results = pool.map(_compute_one_factory, process_args)
+
+    for r in results:
+        for k in total_stats:
+            total_stats[k] += r.get(k, 0)
 
     elapsed = time.time() - start_t
     logger.info("=" * 60)

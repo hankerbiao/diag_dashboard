@@ -370,7 +370,7 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
                 <>
                   <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
                     当前厂区：<span className="font-medium" style={{ color: 'var(--color-text-primary)' }}>{factoryLabel}</span>
-                    · 点击上方「历史诊断记录」查看
+                    · 点击上方「历史诊断记录」查看历史记录
                   </p>
                 </>
               ) : (
