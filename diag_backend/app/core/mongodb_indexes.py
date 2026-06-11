@@ -82,6 +82,20 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
     # ---- global_app_config ----
     await db["global_app_config"].create_index("_id", name="idx_global_config_id")
 
+    # ---- diagnosis_feedback ----
+    await db["diagnosis_feedback"].create_index(
+        [("history_id", 1)], name="idx_diagnosis_feedback_history"
+    )
+    await db["diagnosis_feedback"].create_index(
+        [("sn", 1), ("factory", 1)], name="idx_diagnosis_feedback_sn_factory"
+    )
+    await db["diagnosis_feedback"].create_index(
+        [("user_id", 1), ("created_at", -1)], name="idx_diagnosis_feedback_user_time"
+    )
+    await db["diagnosis_feedback"].create_index(
+        "rating", name="idx_diagnosis_feedback_rating"
+    )
+
     logger.info("MongoDB indexes ensured successfully")
 
 

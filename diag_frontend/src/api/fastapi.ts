@@ -6,7 +6,8 @@ export type {
   ErrorAnalysis, DiagnosisCache, FactorySite, SyncServer, SyncTestDetail,
   PaginatedResponse,
   FaultCategoryItem, YieldTrendItem, StationFailureItem, DecisionDistributionItem,
-  ModelDefectItem, DashboardInsights, KnowledgeDoc, GlobalAiConfig
+  ModelDefectItem, DashboardInsights, KnowledgeDoc, GlobalAiConfig,
+  DiagnosisFeedback, DiagnosisFeedbackParams, DiagnosisRating
 } from './types';
 export { diagnosisApi } from './diagnosis';
 export { factoryApi, syncApi } from './sync';

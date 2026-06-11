@@ -24,6 +24,7 @@ from ..models.request import (
     SaveSnHistoryRequest,
     AppendChatRequest,
     ErrorLogAnalyzeContext,
+    DiagnosisFeedbackRequest,
 )
 from ..models.api import ApiResponse
 from ..models.diagnosis import (
@@ -1354,8 +1355,78 @@ async def get_sn_history_detail(
                 chat_messages=doc.get("chat_messages", []),
                 created_at=doc["created_at"],
                 updated_at=doc.get("updated_at", doc["created_at"]),
+                feedback_rating=doc.get("feedback_rating"),
+                feedback_comment=doc.get("feedback_comment"),
             ).model_dump(),
         )
     except Exception as e:
         logger.exception("查询诊断历史详情失败", extra={"history_id": history_id})
         return ApiResponse(success=False, error=f"查询失败: {e}")
+
+
+# ── 诊断反馈 ──
+
+
+@router.post("/feedback", response_model=ApiResponse)
+async def submit_diagnosis_feedback(
+    request: DiagnosisFeedbackRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """提交诊断反馈 - 用于收集用户对 AI 诊断结果的评价"""
+    try:
+        # 验证：解决一部分/没有解决时必须提供反馈内容
+        if request.rating in ("partially", "unsolved") and not request.comment:
+            return ApiResponse(
+                success=False,
+                error="请提供具体的反馈内容，帮助我们改进模型和知识库",
+            )
+
+        # 构建反馈文档
+        feedback_doc = {
+            "user_id": current_user["id"],
+            "history_id": request.history_id,
+            "sn": request.sn,
+            "factory": request.factory,
+            "rating": request.rating,
+            "comment": request.comment,
+            "diagnosis_context": request.diagnosis_context,
+            "created_at": utc_now_iso(),
+        }
+
+        # 写入 MongoDB
+        col = get_collection("diagnosis_feedback")
+        insert_result = await col.insert_one(feedback_doc)
+
+        # 如果提供了 history_id，更新历史记录中的反馈字段
+        if request.history_id:
+            await get_collection("diagnosis_sn_history").update_one(
+                {"_id": parse_object_id(request.history_id), "user_id": current_user["id"]},
+                {
+                    "$set": {
+                        "feedback_rating": request.rating,
+                        "feedback_comment": request.comment,
+                        "feedback_at": utc_now_iso(),
+                    }
+                },
+            )
+
+        logger.info(
+            "诊断反馈已提交",
+            extra={
+                "feedback_id": str(insert_result.inserted_id),
+                "history_id": request.history_id,
+                "sn": request.sn,
+                "rating": request.rating,
+            },
+        )
+        return ApiResponse(
+            success=True,
+            data={"id": str(insert_result.inserted_id)},
+            message="感谢您的反馈！",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("提交诊断反馈失败", extra={"sn": request.sn, "rating": request.rating})
+        return ApiResponse(success=False, error=f"提交失败: {e}")

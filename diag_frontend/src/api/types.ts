@@ -29,6 +29,8 @@ export interface SnHistoryDetail {
   id: string; sn: string; factory: string; diagnosis_result: DiagnosisResult;
   chat_messages: Array<{ role: string; content: string }>;
   created_at: string; updated_at: string;
+  feedback_rating?: DiagnosisRating;
+  feedback_comment?: string;
 }
 
 export interface ErrorAnalysis {
@@ -82,4 +84,26 @@ export interface KnowledgeDoc {
 export interface GlobalAiConfig {
   api_key: string; base_url: string; model: string; temperature: number;
   provider: string; updated_at: string; updated_by: string;
+}
+
+export type DiagnosisRating = 'solved' | 'partially' | 'unsolved';
+
+export interface DiagnosisFeedback {
+  id: string;
+  history_id?: string;
+  sn: string;
+  factory: string;
+  rating: DiagnosisRating;
+  comment?: string;
+  diagnosis_context?: string;
+  created_at: string;
+}
+
+export interface DiagnosisFeedbackParams {
+  history_id?: string;
+  sn: string;
+  factory: string;
+  rating: DiagnosisRating;
+  comment?: string;
+  diagnosis_context?: string;
 }

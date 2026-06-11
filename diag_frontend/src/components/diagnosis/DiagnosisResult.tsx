@@ -3,11 +3,13 @@ import { Bot, Activity, AlertTriangle, Wrench, Terminal, ChevronDown, ChevronRig
 import type { DiagnosisResult as DiagnosisResultType, TestLogItem } from '../../api/fastapi';
 import { diagnosisApi } from '../../api/fastapi';
 import ResultBadge from '../common/ResultBadge';
+import FeedbackPanel from '../common/FeedbackPanel';
 import { collectFailedTestLogs, isSimsLogFailed } from '../../utils/testStatus';
 
 interface DiagnosisResultProps {
   result: DiagnosisResultType;
   factory: string;
+  historyId?: string;
 }
 
 const CATEGORY_COLORS: Record<string, { bg: string; border: string; text: string; badge: string }> = {
@@ -23,6 +25,17 @@ function getCategoryStyle(category: string) {
   const cat = category.toLowerCase();
   if (cat.includes('hardware') || cat.includes('硬件')) return CATEGORY_COLORS.hardware;
   return CATEGORY_COLORS.hardware;
+}
+
+/** 构建诊断上下文摘要，用于反馈记录 */
+function buildDiagnosisContext(result: DiagnosisResultType): string {
+  const parts: string[] = [];
+  if (result.category) parts.push(`故障类别: ${result.category}`);
+  if (result.confidence) parts.push(`置信度: ${Math.round(result.confidence * 100)}%`);
+  if (result.summary) parts.push(`诊断摘要: ${result.summary}`);
+  if (result.root_cause_detail) parts.push(`根因分析: ${result.root_cause_detail}`);
+  if (result.suggestions?.length) parts.push(`建议: ${result.suggestions.join('; ')}`);
+  return parts.join('\n');
 }
 
 function RawLogRow({ log, factory, sn }: { log: TestLogItem; factory: string; sn: string; key?: string }) {
@@ -102,10 +115,11 @@ function RawLogRow({ log, factory, sn }: { log: TestLogItem; factory: string; sn
   );
 }
 
-export default function DiagnosisResult({ result, factory }: DiagnosisResultProps) {
+export default function DiagnosisResult({ result, factory, historyId }: DiagnosisResultProps) {
   const catStyle = getCategoryStyle(result.category);
   const failedLogs = collectFailedTestLogs(result);
   const recentLogs = result.test_logs ?? [];
+  const diagnosisContext = buildDiagnosisContext(result);
 
   return (
     <div
@@ -397,6 +411,14 @@ export default function DiagnosisResult({ result, factory }: DiagnosisResultProp
         </div>
         <div className="h-4 shrink-0" />
       </div>
+
+      {/* 诊断反馈面板 */}
+      <FeedbackPanel
+        historyId={historyId}
+        sn={result.sn}
+        factory={factory}
+        diagnosisContext={diagnosisContext}
+      />
     </div>
   );
 }

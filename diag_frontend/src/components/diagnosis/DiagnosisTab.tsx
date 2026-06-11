@@ -319,7 +319,7 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
             <div className="flex-1 flex min-h-0">
               <div className="flex-1 flex min-h-0 relative">
                 <div className="flex-1 flex min-h-0">
-                  <DiagnosisResult result={result} factory={factory} />
+                  <DiagnosisResult result={result} factory={factory} historyId={historyId} />
                 </div>
                 <DiagnosisChat messages={chatMessages} loading={chatLoading} onSend={handleChatSend} />
               </div>

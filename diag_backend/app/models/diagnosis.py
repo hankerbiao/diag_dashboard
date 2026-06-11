@@ -133,3 +133,5 @@ class SnHistoryDetail(BaseModel):
     chat_messages: list[dict] = []
     created_at: str
     updated_at: str
+    feedback_rating: Optional[str] = None
+    feedback_comment: Optional[str] = None

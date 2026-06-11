@@ -164,4 +164,17 @@ export const diagnosisApi = {
   async getSnHistoryDetail(historyId: string) {
     return fetchApi<SnHistoryDetail>(`/api/diagnosis/sn/history/${historyId}`);
   },
+  async submitFeedback(params: {
+    history_id?: string;
+    sn: string;
+    factory: string;
+    rating: 'solved' | 'partially' | 'unsolved';
+    comment?: string;
+    diagnosis_context?: string;
+  }) {
+    return fetchApi<{ id: string }>('/api/diagnosis/feedback', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  },
 };

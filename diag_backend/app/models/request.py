@@ -103,3 +103,18 @@ class AutoSyncConfigUpdateRequest(BaseModel):
     factory_overrides: Optional[dict[str, FactoryOverride]] = None
     mes_enabled: Optional[bool] = None
     mes_interval_minutes: Optional[int] = None
+
+
+class DiagnosisFeedbackRequest(BaseModel):
+    """诊断反馈请求 - 用于收集用户对 AI 诊断结果的评价"""
+    history_id: Optional[str] = None  # 诊断历史 ID（可选，若无则用 sn+factory 定位）
+    sn: str = Field(..., min_length=1)
+    factory: str = Field(..., min_length=1)
+    rating: Literal["solved", "partially", "unsolved"] = Field(..., description="solved=可以解决, partially=解决一部分, unsolved=没有解决")
+    comment: Optional[str] = Field(None, max_length=2000, description="用户反馈（解决一部分/没有解决时必填）")
+    diagnosis_context: Optional[str] = Field(None, max_length=5000, description="诊断摘要上下文，便于后期分析")
+
+    @field_validator("sn", "factory")
+    @classmethod
+    def strip_whitespace(cls, v: str) -> str:
+        return v.strip()
