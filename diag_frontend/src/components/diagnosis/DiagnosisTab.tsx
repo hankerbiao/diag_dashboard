@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, type KeyboardEvent } from 're
 import { Bot, Clock, ChevronRight, Loader2 } from 'lucide-react';
 import type { FactorySite, DiagnosisResult as DiagnosisResultType, SnHistoryItem as SnHistoryItemType } from '../../api/fastapi';
 import { diagnosisApi } from '../../api/fastapi';
+import { useToast } from '../../contexts/ToastContext';
 import DiagnosisInput from './DiagnosisInput';
 import DiagnosisResult from './DiagnosisResult';
 import DiagnosisChat, { type ChatMessage } from './DiagnosisChat';
@@ -42,6 +43,8 @@ function buildDiagnosisContext(result: DiagnosisResultType) {
 }
 
 export default function DiagnosisTab({ factory, factorySites }: { factory: string; factorySites: FactorySite[] }) {
+  const { toast, dismiss } = useToast();
+  const toastRef = useRef<string | null>(null);
   const [sn, setSn] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<DiagnosisResultType | null>(null);
@@ -125,6 +128,11 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
 
     abortRef.current?.abort();
     const reqId = ++requestIdRef.current;
+
+    // 显示发送提示
+    if (toastRef.current) dismiss(toastRef.current);
+    toastRef.current = toast('loading', '正在诊断中...');
+
     const controller = diagnosisApi.diagnoseBySNSse(
       snVal,
       factory,
@@ -135,6 +143,12 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
       },
       (data) => {
         if (reqId !== requestIdRef.current) return;
+        // 诊断完成 -> 关闭 loading 提示，显示成功提示
+        if (toastRef.current) {
+          dismiss(toastRef.current);
+          toastRef.current = null;
+        }
+        toast('success', '诊断分析完成');
         setResult(data);
         setLoading(false);
         setProgress(null);
@@ -143,7 +157,14 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
       },
       (msg) => {
         if (reqId !== requestIdRef.current) return;
-        setError(msg === '请求已取消' ? '诊断已取消' : msg);
+        // 诊断失败 -> 关闭 loading 提示，显示错误提示
+        if (toastRef.current) {
+          dismiss(toastRef.current);
+          toastRef.current = null;
+        }
+        const errorMsg = msg === '请求已取消' ? '诊断已取消' : msg;
+        toast('error', `诊断失败：${errorMsg}`);
+        setError(errorMsg);
         setLoading(false);
         setProgress(null);
       },
@@ -163,7 +184,7 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
     setChatMessages([]);
     setHistoryId(null);
     setActiveHistoryId(null);
-  }, [sn, factory, persistDiagnosis]);
+  }, [sn, factory, persistDiagnosis, toast, dismiss]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && !loading && sn.trim() && factoryReady) handleDiagnose();
@@ -174,24 +195,32 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
     const userMsg: ChatMessage = { role: 'user', content: question };
     setChatMessages((prev) => [...prev, userMsg]);
     setChatLoading(true);
+
+    const chatToastId = toast('loading', '正在追问...');
+
     try {
       const res = await diagnosisApi.followUp(result.sn, question, buildDiagnosisContext(result));
+      dismiss(chatToastId);
       if (res.success && res.data) {
         const assistantMsg: ChatMessage = { role: 'assistant', content: res.data.answer };
         setChatMessages((prev) => [...prev, assistantMsg]);
+        toast('success', '追问回复完成');
         if (historyId) {
           await diagnosisApi.appendChatMessage(historyId, 'user', question).catch(() => {});
           await diagnosisApi.appendChatMessage(historyId, 'assistant', res.data.answer).catch(() => {});
         }
       } else {
         setChatMessages((prev) => [...prev, { role: 'assistant', content: res.error || '追问失败' }]);
+        toast('error', res.error || '追问失败');
       }
     } catch {
+      dismiss(chatToastId);
       setChatMessages((prev) => [...prev, { role: 'assistant', content: '网络请求失败' }]);
+      toast('error', '网络请求失败');
     } finally {
       setChatLoading(false);
     }
-  }, [result, historyId]);
+  }, [result, historyId, toast, dismiss]);
 
   const handleHistoryClick = async (item: SnHistoryItemType) => {
     if (item.id === activeHistoryId) return;

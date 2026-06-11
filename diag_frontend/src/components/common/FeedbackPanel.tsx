@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import { diagnosisApi } from '../../api/fastapi';
+import { useToast } from '../../contexts/ToastContext';
 
 interface FeedbackPanelProps {
   historyId?: string;
@@ -17,6 +18,7 @@ export default function FeedbackPanel({
   factory,
   diagnosisContext,
 }: FeedbackPanelProps) {
+  const { toast } = useToast();
   const [selectedRating, setSelectedRating] = useState<Rating | null>(null);
   const [comment, setComment] = useState('');
   const [submitted, setSubmitted] = useState(false);
@@ -68,11 +70,14 @@ export default function FeedbackPanel({
 
       if (res.success) {
         setSubmitted(true);
+        toast('success', '感谢您的反馈！');
       } else {
         setError(res.error || '提交失败');
+        toast('error', res.error || '提交失败');
       }
     } catch {
       setError('网络错误');
+      toast('error', '网络错误，反馈提交失败');
     } finally {
       setLoading(false);
     }

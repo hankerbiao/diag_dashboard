@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import type { NavigationTab } from './types';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { AuthProvider } from './contexts/AuthContext';
+import { ToastProvider } from './contexts/ToastContext';
 import AuthGuard from './components/auth/AuthGuard';
 import Sidebar from './components/layout/Sidebar';
 import Header from './components/layout/Header';
@@ -72,9 +73,11 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <AuthGuard>
-          <AppContent />
-        </AuthGuard>
+        <ToastProvider>
+          <AuthGuard>
+            <AppContent />
+          </AuthGuard>
+        </ToastProvider>
       </AuthProvider>
     </ThemeProvider>
   );
