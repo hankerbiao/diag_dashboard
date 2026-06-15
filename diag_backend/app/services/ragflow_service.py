@@ -267,10 +267,10 @@ async def resolve_default_dataset() -> str:
     for ds in datasets:
         if ds.get("name") == cfg_name:
             _default_dataset_id = ds.get("id")
-            logger.debug("resolve_default_dataset: 找到数据集", extra={"dataset_id": _default_dataset_id, "name": cfg_name})
+            logger.debug("resolve_default_dataset: 找到数据集", extra={"dataset_id": _default_dataset_id, "ds_name": cfg_name})
             return _default_dataset_id
 
-    logger.debug("resolve_default_dataset: 数据集不存在，尝试创建", extra={"name": cfg_name})
+    logger.debug("resolve_default_dataset: 数据集不存在，尝试创建", extra={"ds_name": cfg_name})
     result = await create_dataset(name=cfg_name, description="WeaveEye 智能诊断系统默认知识库")
     _default_dataset_id = result.get("id")
     logger.debug("resolve_default_dataset: 创建结果", extra={"result": str(result)[:300], "dataset_id": _default_dataset_id})

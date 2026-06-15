@@ -13,14 +13,16 @@ DEVICE_INFO_TPL = """## 设备信息
 
 
 def _build_diagnosis_prompt(error_log: dict, knowledge_context: str, extra_hint: str = "") -> str:
+    sn = error_log.get('sn', '未知')
+    test_item = error_log.get('test_item', '未知')
+    fail_details = error_log.get('fail_details', '无')
+    test_time = error_log.get('test_time', '未知')
+    info_block = DEVICE_INFO_TPL.format(
+        sn=sn, test_item=test_item, fail_details=fail_details, test_time=test_time,
+    )
     return f"""请根据以下内容进行故障诊断。
 
-{DEVICE_INFO_TPL.format(
-    sn=error_log.get('sn', '未知'),
-    test_item=error_log.get('test_item', '未知'),
-    fail_details=error_log.get('fail_details', '无'),
-    test_time=error_log.get('test_time', '未知'),
-)}
+{info_block}
 
 {knowledge_context}
 
@@ -28,7 +30,7 @@ def _build_diagnosis_prompt(error_log: dict, knowledge_context: str, extra_hint:
 
 请以 JSON 格式返回诊断结果：
 - root_cause: 诊断的根本原因
-- evidence: 关键证据列表，每项为一个对象 { "log_line": "日志原文行", "conclusion": "该行的结论说明" }
+- evidence: 关键证据列表，每项为一个对象 {{ "log_line": "日志原文行", "conclusion": "该行的结论说明" }}
 - analysis: 详细分析摘要
 - repair_suggestions: 维修建议列表（3-5条）
 - knowledge_refs: 知识库引用列表 [{{source, content}}]，未引用则返回 []"""

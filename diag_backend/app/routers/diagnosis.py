@@ -1003,6 +1003,7 @@ async def _run_analysis(
         else:
             raise ValueError("未找到异常日志")
 
+    sn = error_log.get("sn", "")
     log_path = (error_log.get("log_path") or "").strip()
     resolved_url, ftp_user, ftp_password = _resolve_log_download_config(
         log_base_url,
@@ -1086,6 +1087,7 @@ async def _run_analysis(
                 "error": str(e),
                 "error_type": type(e).__name__,
             },
+            exc_info=True,
         )
         sections.append("（知识库检索异常）")
 
@@ -1243,7 +1245,7 @@ async def _sse_wrap(
         except Exception as e:
             msg = str(e) if isinstance(e, ValueError) else f"{on_error_prefix}: {e}"
             if isinstance(e, ValueError):
-                logger.warning(msg)
+                logger.warning(msg, exc_info=True)
             else:
                 logger.exception(
                     "诊断异常", extra={"error": str(e), "error_type": type(e).__name__}
