@@ -106,7 +106,7 @@ class DiagnosisCacheResponse(BaseModel):
     sn: str
     test_item: str
     root_cause: str
-    evidence: list[dict] = []
+    evidence: list = []
     analysis: str
     repair_suggestions: list[str]
     knowledge_refs: list[dict] = []

@@ -204,7 +204,7 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
       if (res.success && res.data) {
         const rows: ErrorLogRow[] = res.data.items.map((d, idx) => ({
           id: d.id || `${factory}_${d.server_sn}_${d.test_time}_${idx}`,
-          sn: d.server_sn,
+          sn: d.server_sn || server.server_sn,
           testItem: d.detailed_flow || d.big_flow || '-',
           testTime: d.test_time,
           status: d.server_test_result || '-',

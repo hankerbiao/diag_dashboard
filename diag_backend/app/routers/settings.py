@@ -34,6 +34,7 @@ async def get_global_ai_config(current_user: dict = Depends(get_current_user)):
                     "base_url": config.get("base_url", ""),
                     "model": config.get("model", ""),
                     "temperature": config.get("temperature", 0.7),
+                    "max_tokens": config.get("max_tokens", 28000),
                     "provider": config.get("provider", "openai"),
                     "updated_at": config.get("updated_at", ""),
                     "updated_by": config.get("updated_by", ""),
@@ -48,6 +49,7 @@ async def get_global_ai_config(current_user: dict = Depends(get_current_user)):
                 "base_url": "",
                 "model": "",
                 "temperature": 0.7,
+                "max_tokens": 28000,
                 "provider": "openai",
                 "updated_at": "",
                 "updated_by": "",
@@ -78,6 +80,8 @@ async def update_global_ai_config(
             update_data["temperature"] = request.temperature
         if request.provider is not None:
             update_data["provider"] = request.provider
+        if request.max_tokens is not None:
+            update_data["max_tokens"] = request.max_tokens
 
         update_data["updated_by"] = current_user["id"]
         update_data["updated_at"] = utc_now_iso()

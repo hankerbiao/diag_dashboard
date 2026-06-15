@@ -53,6 +53,7 @@ class GlobalAiConfigUpdateRequest(BaseModel):
     model: Optional[str] = None
     temperature: Optional[float] = None
     provider: Optional[str] = None
+    max_tokens: Optional[int] = None
 
 
 class ReAnalyzeRequest(BaseModel):

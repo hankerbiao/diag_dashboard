@@ -45,6 +45,10 @@ MAX_LOG_BYTES = 2 * 1024 * 1024
 LOG_TAIL_LINES = 50
 RAG_TOP_K = 10
 
+# LLM 上下文窗口安全限制（为模型最大上下文留出 4096 token 余量给 system prompt 和输出）
+# 例如模型 32K → MAX_PROMPT_TOKENS ≈ 28K
+MAX_PROMPT_TOKENS = 28_000
+
 router = APIRouter(prefix="/diagnosis", tags=["诊断"])
 
 
@@ -926,6 +930,32 @@ async def _build_cached_response(cached: dict) -> dict:
 # ── 核心诊断逻辑 ──
 
 
+def _estimate_tokens(text: str) -> int:
+    """估算文本的 token 数量（中文 ~1.5 字/token，英文 ~4 字/token）"""
+    chinese = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    other = len(text) - chinese
+    return int(chinese * 1.5 + other * 0.25) + 1
+
+
+def _truncate_to_budget(text: str, budget: int, label: str = "内容") -> str:
+    """按 token 预算截断文本，保留头部和尾部关键信息"""
+    estimated = _estimate_tokens(text)
+    if estimated <= budget:
+        return text
+    avg_bytes_per_token = len(text.encode("utf-8")) / max(estimated, 1)
+    target_chars = int(budget * avg_bytes_per_token * 0.9)
+    if target_chars >= len(text):
+        return text
+    # 保留尾巴（日志尾部信息更重要）
+    tail_chars = min(target_chars, len(text))
+    truncated = text[-tail_chars:]
+    logger.info(
+        "%s 超出 token 预算: estimated=%d budget=%d original_len=%d truncated_len=%d",
+        label, estimated, budget, len(text), len(truncated),
+    )
+    return truncated
+
+
 async def _run_analysis(
     error_log_id: str,
     log_base_url: str,
@@ -1038,6 +1068,42 @@ async def _run_analysis(
             },
         )
         sections.append("（知识库检索异常）")
+
+    # ── 上下文 Token 预算截断 ──
+    max_tokens = llm_service.get_config_value("max_tokens", MAX_PROMPT_TOKENS)
+    # 预留 4096 token 给 system prompt + 输出
+    content_budget = max_tokens - 4096
+    full_text = "\n\n".join(sections)
+    estimated = _estimate_tokens(full_text)
+    if estimated > max_tokens:
+        logger.info(
+            "上下文超出 token 上限: estimated=%d limit=%d content_budget=%d",
+            estimated, max_tokens, content_budget,
+        )
+        truncated = []
+        log_section_idx = next(
+            (i for i, s in enumerate(sections) if s.startswith("## 日志文件尾部内容")),
+            None,
+        )
+        kb_section_idx = next(
+            (i for i, s in enumerate(sections) if s.startswith("## 知识库参考文档")),
+            None,
+        )
+        for i, sec in enumerate(sections):
+            if i == log_section_idx:
+                # 日志部分截断到预算的 60%
+                log_budget = int(content_budget * 0.6)
+                log_sec = _truncate_to_budget(sec, log_budget, "日志内容")
+                truncated.append(log_sec)
+            elif i == kb_section_idx:
+                # 知识库部分截断到预算的 30%
+                kb_budget = int(content_budget * 0.3)
+                kb_sec = _truncate_to_budget(sec, kb_budget, "知识库参考")
+                truncated.append(kb_sec)
+            else:
+                truncated.append(sec)
+        sections = truncated
+        logger.info("上下文截断完成: sections=%d", len(sections))
 
     await send_progress("llm", "正在调用大模型深度诊断...")
     analysis = await llm_service.analyze_with_knowledge_stream(

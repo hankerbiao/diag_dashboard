@@ -17,6 +17,7 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
     const [baseUrl, setBaseUrl] = useState('https://api.openai.com/v1');
     const [model, setModel] = useState('gpt-4-turbo');
     const [temperature, setTemperature] = useState(0.7);
+    const [maxTokens, setMaxTokens] = useState(28000);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
@@ -28,6 +29,7 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
           setBaseUrl(resp.data.base_url || 'https://api.openai.com/v1');
           setModel(resp.data.model || 'gpt-4-turbo');
           setTemperature(resp.data.temperature ?? 0.7);
+          setMaxTokens(resp.data.max_tokens ?? 28000);
         }
       }).catch(() => {
         // 保持默认值
@@ -44,6 +46,7 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
             base_url: baseUrl,
             model,
             temperature,
+            max_tokens: maxTokens,
           });
           if (resp.success) {
             onSuccessMessage?.('AI 大模型配置已更新');
@@ -193,6 +196,42 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
                 }}
                 placeholder="gpt-4-turbo"
               />
+            </div>
+
+            <div className="space-y-2">
+              <label
+                className="flex items-center justify-between text-[13px] font-bold tracking-wide"
+                style={{ color: 'var(--color-text-primary)' }}
+              >
+                <span>上下文 Token 上限</span>
+                <span
+                  className="font-mono font-bold px-2.5 py-0.5 rounded text-xs"
+                  style={{
+                    backgroundColor: 'var(--color-accent-light)',
+                    color: 'var(--color-accent)',
+                  }}
+                >
+                  {maxTokens.toLocaleString()}
+                </span>
+              </label>
+              <input
+                type="number"
+                value={maxTokens}
+                onChange={(e) => setMaxTokens(Math.max(4096, parseInt(e.target.value) || 28000))}
+                className="w-full h-11 border rounded-lg px-4 text-sm outline-none transition-all shadow-sm font-mono"
+                style={{
+                  borderColor: 'var(--color-border)',
+                  backgroundColor: 'var(--color-bg-primary)',
+                  color: 'var(--color-text-primary)',
+                }}
+                min={4096}
+                max={131072}
+                step={1024}
+                placeholder="28000"
+              />
+              <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                超过上限的日志和知识库内容将被自动截断。建议设为模型最大上下文 - 4096。
+              </p>
             </div>
 
             <div className="space-y-2">

@@ -33,6 +33,7 @@ class TestGetAiConfig:
             "base_url": "https://api.openai.com/v1",
             "model": "gpt-4-turbo",
             "temperature": 0.7,
+            "max_tokens": 28000,
             "provider": "openai",
             "updated_by": "system",
             "updated_at": "2026-05-27T00:00:00Z",

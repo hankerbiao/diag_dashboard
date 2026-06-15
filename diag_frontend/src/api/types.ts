@@ -83,7 +83,7 @@ export interface KnowledgeDoc {
 
 export interface GlobalAiConfig {
   api_key: string; base_url: string; model: string; temperature: number;
-  provider: string; updated_at: string; updated_by: string;
+  max_tokens: number; provider: string; updated_at: string; updated_by: string;
 }
 
 export type DiagnosisRating = 'solved' | 'partially' | 'unsolved';

@@ -28,7 +28,7 @@ def _build_diagnosis_prompt(error_log: dict, knowledge_context: str, extra_hint:
 
 请以 JSON 格式返回诊断结果：
 - root_cause: 诊断的根本原因
-- evidence: 关键证据列表（每项：日志行 + 结论说明）
+- evidence: 关键证据列表，每项为一个对象 { "log_line": "日志原文行", "conclusion": "该行的结论说明" }
 - analysis: 详细分析摘要
 - repair_suggestions: 维修建议列表（3-5条）
 - knowledge_refs: 知识库引用列表 [{{source, content}}]，未引用则返回 []"""
@@ -44,6 +44,7 @@ class LLMService:
             "base_url": "https://api.openai.com/v1",
             "model": "gpt-4-turbo",
             "temperature": 0.7,
+            "max_tokens": 28000,
         }
         self._loaded = False
 
@@ -63,10 +64,11 @@ class LLMService:
                     "base_url": config.get("base_url", "https://api.openai.com/v1"),
                     "model": config.get("model", "gpt-4-turbo"),
                     "temperature": config.get("temperature", 0.7),
+                    "max_tokens": config.get("max_tokens", 28000),
                 }
         except Exception:
             pass
-        return {"api_key": "", "base_url": "", "model": "gpt-4-turbo", "temperature": 0.7}
+        return {"api_key": "", "base_url": "", "model": "gpt-4-turbo", "temperature": 0.7, "max_tokens": 28000}
 
     async def _ensure_configured(self):
         """懒加载配置（仅在无预设客户端时执行一次）"""
@@ -93,6 +95,14 @@ class LLMService:
         self._config = await self._load_config_from_db()
         self._rebuild_client()
         self._loaded = True
+
+    # ------------------------------------------------------------------
+    # 公共配置访问
+    # ------------------------------------------------------------------
+
+    def get_config_value(self, key: str, default=None):
+        """安全地获取配置项"""
+        return self._config.get(key, default)
 
     # ------------------------------------------------------------------
     # Mock 响应（无可用 LLM 时的降级路径）
@@ -314,7 +324,7 @@ class LLMService:
         self, error_log: dict, knowledge_context: str, token_cb: Callable[[str], Awaitable[None]],
     ) -> dict:
         prompt = _build_diagnosis_prompt(error_log, knowledge_context, "如果引用了知识库内容，请标注 [参考 N]。")
-        return self._parse_json_response(
+        result = self._parse_json_response(
             await self.chat_completion_stream(
                 [{"role": "system", "content": "硬件故障诊断专家"},
                  {"role": "user", "content": prompt}],
@@ -322,6 +332,13 @@ class LLMService:
             ),
             {"root_cause": "分析失败", "evidence": [], "repair_suggestions": ["请重试"], "knowledge_refs": []}
         )
+        # 将 evidence 中的字符串条目转为 { "log_line": str, "conclusion": "" }
+        if "evidence" in result and isinstance(result["evidence"], list):
+            result["evidence"] = [
+                {"log_line": item, "conclusion": ""} if isinstance(item, str) else item
+                for item in result["evidence"]
+            ]
+        return result
 
 
 llm_service = LLMService()
