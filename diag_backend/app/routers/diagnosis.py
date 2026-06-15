@@ -231,11 +231,13 @@ async def _gather_sn_data(
                         search_terms.append(val)
 
         query = " ".join(search_terms[:15]) if search_terms else ""
+        logger.debug("知识库检索 _gather_sn_data", extra={"sn": sn, "query": query[:200]})
         if query.strip():
             kb_result = await ragflow_service.search_knowledge_base(
                 question=query, top_k=RAG_TOP_K
             )
             refs = kb_result.get("references", [])
+            logger.debug("知识库检索结果", extra={"sn": sn, "refs_count": len(refs)})
             if refs:
                 seen_docs: dict[str, list[str]] = {}
                 for ref in refs:
@@ -250,7 +252,7 @@ async def _gather_sn_data(
                     )
                 kb_context = "\n".join(kb_lines)
     except Exception as e:
-        logger.warning("知识库检索失败", extra={"sn": sn, "error": str(e)})
+        logger.warning("知识库检索失败", extra={"sn": sn, "query": query[:200] if query else "", "error": str(e), "error_type": type(e).__name__})
 
     if log_file_context:
         kb_context = f"{kb_context}\n\n{log_file_context}" if kb_context else log_file_context
@@ -1034,11 +1036,16 @@ async def _run_analysis(
                 ],
             )
         )
+        logger.debug(
+            "知识库检索 _run_analysis",
+            extra={"sn": sn, "search_query": search_query[:200]},
+        )
         if search_query.strip():
             result = await ragflow_service.search_knowledge_base(
                 question=search_query, top_k=RAG_TOP_K
             )
             refs = result.get("references", [])
+            logger.debug("知识库检索结果", extra={"sn": sn, "refs_count": len(refs)})
             if refs:
                 seen = {}
                 for ref in refs:
@@ -1063,8 +1070,10 @@ async def _run_analysis(
         logger.warning(
             "知识库检索失败",
             extra={
+                "sn": sn,
                 "search_query": search_query[:200] if search_query else None,
                 "error": str(e),
+                "error_type": type(e).__name__,
             },
         )
         sections.append("（知识库检索异常）")

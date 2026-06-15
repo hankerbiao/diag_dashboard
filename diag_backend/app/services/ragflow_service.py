@@ -40,10 +40,15 @@ def _hdrs() -> dict:
 @asynccontextmanager
 async def _client(timeout: int = T_SHORT):
     if not _ok():
+        logger.debug("RAGFlow _client: 未配置，返回 None")
         yield None
         return
-    async with httpx.AsyncClient(timeout=timeout) as c:
-        yield c
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            yield c
+    except Exception as e:
+        logger.debug("RAGFlow _client HTTP 异常", extra={"error": str(e), "error_type": type(e).__name__, "timeout": timeout}, exc_info=True)
+        raise
 
 
 def _check(resp: httpx.Response) -> dict:
@@ -177,24 +182,49 @@ async def search_knowledge_base(
     question: str, similarity_threshold: float = 0.2, vector_similarity_weight: float = 0.3, top_k: int = 10,
 ) -> dict:
     """检索知识库 — 使用 RAGFlow retrieval API"""
+    logger.debug(
+        "RAGFlow search_knowledge_base 开始",
+        extra={"question": question[:200], "similarity_threshold": similarity_threshold, "top_k": top_k},
+    )
     if not _ok():
+        url, key = _cfg()
+        logger.debug(
+            "RAGFlow 未配置，跳过检索",
+            extra={"ragflow_api_url_set": bool(url), "ragflow_api_key_set": bool(key)},
+        )
         return {"references": []}
     dataset_id = await resolve_default_dataset()
     if not dataset_id:
+        logger.debug("RAGFlow 默认数据集未找到，跳过检索")
         return {"references": []}
 
-    async with _client(T_MEDIUM) as c:
-        resp = await c.post(f"{_cfg()[0]}/api/v1/retrieval", headers=_hdrs(), json={
-            "question": question, "dataset_ids": [dataset_id],
-            "similarity_threshold": similarity_threshold, "vector_similarity_weight": vector_similarity_weight, "top_k": top_k,
-        })
-        result = resp.json()
-        if result.get("code", -1) != 0:
-            raise RuntimeError(f"RAGFlow 检索错误: {result.get('message', result.get('msg', '未知错误'))}")
+    logger.debug("RAGFlow 开始请求 retrieval API", extra={"dataset_id": dataset_id, "url": _cfg()[0]})
+    try:
+        async with _client(T_MEDIUM) as c:
+            if c is None:
+                logger.debug("RAGFlow HTTP 客户端创建失败 (_client 返回 None)")
+                return {"references": []}
+            resp = await c.post(f"{_cfg()[0]}/api/v1/retrieval", headers=_hdrs(), json={
+                "question": question, "dataset_ids": [dataset_id],
+                "similarity_threshold": similarity_threshold, "vector_similarity_weight": vector_similarity_weight, "top_k": top_k,
+            })
+            logger.debug(
+                "RAGFlow retrieval API 响应",
+                extra={"status_code": resp.status_code, "body_preview": resp.text[:500]},
+            )
+            result = resp.json()
+            if result.get("code", -1) != 0:
+                err_msg = f"RAGFlow 检索错误: {result.get('message', result.get('msg', '未知错误'))}"
+                logger.debug("RAGFlow retrieval API 返回业务错误", extra={"code": result.get("code"), "message": result.get("message"), "msg": result.get("msg")})
+                raise RuntimeError(err_msg)
 
-        data = result.get("data", {})
-        chunks = data.get("chunks", [])
-        doc_map = {d.get("doc_id", ""): d.get("doc_name", "") for d in data.get("doc_aggs", []) if d.get("doc_id")}
+            data = result.get("data", {})
+            chunks = data.get("chunks", [])
+            doc_map = {d.get("doc_id", ""): d.get("doc_name", "") for d in data.get("doc_aggs", []) if d.get("doc_id")}
+            logger.debug("RAGFlow 检索成功", extra={"chunks_count": len(chunks), "docs_count": len(doc_map)})
+    except Exception as e:
+        logger.debug("RAGFlow search_knowledge_base 异常", extra={"error": str(e), "error_type": type(e).__name__}, exc_info=True)
+        raise
 
     return {"references": [{
         "chunk_id": c.get("id", ""), "content": c.get("content", ""),
@@ -227,16 +257,23 @@ _default_chat_id: Optional[str] = None
 async def resolve_default_dataset() -> str:
     global _default_dataset_id
     if not _ok() or _default_dataset_id:
+        logger.debug("resolve_default_dataset: 使用缓存或未配置", extra={"_ok": _ok() if not _default_dataset_id else True, "cached_id": _default_dataset_id})
         return _default_dataset_id or ""
 
     cfg_name = get_settings().ragflow_default_dataset or RAGFLOW_DEFAULT_DATASET_NAME
-    for ds in await list_datasets(page_size=200):
+    logger.debug("resolve_default_dataset: 开始查找数据集", extra={"dataset_name": cfg_name})
+    datasets = await list_datasets(page_size=200)
+    logger.debug("resolve_default_dataset: 获取到数据集列表", extra={"count": len(datasets)})
+    for ds in datasets:
         if ds.get("name") == cfg_name:
             _default_dataset_id = ds.get("id")
+            logger.debug("resolve_default_dataset: 找到数据集", extra={"dataset_id": _default_dataset_id, "name": cfg_name})
             return _default_dataset_id
 
+    logger.debug("resolve_default_dataset: 数据集不存在，尝试创建", extra={"name": cfg_name})
     result = await create_dataset(name=cfg_name, description="WeaveEye 智能诊断系统默认知识库")
     _default_dataset_id = result.get("id")
+    logger.debug("resolve_default_dataset: 创建结果", extra={"result": str(result)[:300], "dataset_id": _default_dataset_id})
     return _default_dataset_id
 
 
