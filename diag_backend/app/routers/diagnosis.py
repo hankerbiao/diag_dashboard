@@ -1236,12 +1236,16 @@ async def _sse_wrap(
 
         try:
             result = await asyncio.wait_for(runner(_progress, _token), timeout=600.0)
+            logger.debug("SSE _run 完成，发送 done 事件")
             await queue.put(("done", {"success": True, "data": result}))
         except asyncio.TimeoutError:
             logger.error("诊断超时（10分钟）", extra={"event": "diagnosis_timeout"})
             await queue.put(
                 ("error", {"message": "诊断超时，大模型响应时间过长，请稍后重试"})
             )
+        except asyncio.CancelledError:
+            logger.warning("SSE _run 被取消")
+            await queue.put(("error", {"message": "诊断被取消"}))
         except Exception as e:
             msg = str(e) if isinstance(e, ValueError) else f"{on_error_prefix}: {e}"
             if isinstance(e, ValueError):
@@ -1250,7 +1254,10 @@ async def _sse_wrap(
                 logger.exception(
                     "诊断异常", extra={"error": str(e), "error_type": type(e).__name__}
                 )
+            logger.debug("SSE _run 异常，发送 error 事件: %s", msg)
             await queue.put(("error", {"message": msg}))
+        finally:
+            logger.debug("SSE _run 结束")
 
     task = asyncio.create_task(_run())
     while True:

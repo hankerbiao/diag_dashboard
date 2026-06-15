@@ -32,11 +32,14 @@ async function consumeSSE<T>(resp: Response, callbacks: SSECallbacks<T>, signal?
   const { onProgress, onComplete, onError, onToken } = callbacks;
   signal?.addEventListener('abort', () => reader.cancel());
 
-  try {
+    try {
     while (true) {
       if (signal?.aborted) { onError('请求已取消'); return; }
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        console.debug('[SSE] stream ended, finished=', finished);
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
