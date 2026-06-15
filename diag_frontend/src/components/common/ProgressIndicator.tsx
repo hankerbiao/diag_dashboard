@@ -17,6 +17,7 @@ export default function ProgressIndicator({
   streamingText,
 }: ProgressIndicatorProps) {
   const curIdx = currentStage ? stages.indexOf(currentStage) : 0;
+  const isLlmStage = currentStage === stages[stages.length - 1];
 
   return (
     <div>
@@ -42,16 +43,23 @@ export default function ProgressIndicator({
               style={{ color: done ? '#10b981' : cur ? 'var(--color-accent)' : 'var(--color-text-muted)' }}>
               {labels[stage] || stage}
             </span>
-            {cur && currentStage && (
+            {cur && currentStage && !isLlmStage && (
               <span className="text-[11px] animate-pulse" style={{ color: 'var(--color-accent)' }}>
-                {currentStage === stages[stages.length - 1]
-                  ? streamingText || '推理中...'
-                  : currentDetail || ''}
+                {currentDetail || ''}
               </span>
             )}
           </div>
         );
       })}
+      {isLlmStage && streamingText && (
+        <div className="mx-4 mt-2 rounded-lg border p-3 max-h-64 overflow-y-auto custom-scrollbar"
+          style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}>
+          <pre className="text-[12px] leading-relaxed whitespace-pre-wrap break-words font-mono"
+            style={{ color: 'var(--color-text-primary)' }}>
+            {streamingText}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

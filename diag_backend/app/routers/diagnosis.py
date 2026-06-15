@@ -42,7 +42,7 @@ from ..services import ragflow_service
 logger = logging.getLogger(__name__)
 
 MAX_LOG_BYTES = 2 * 1024 * 1024
-LOG_TAIL_LINES = 50
+LOG_TAIL_CHARS = 3000  # 每个日志文件取末尾最多 3000 字符，避免单行长日志导致上下文过长
 RAG_TOP_K = 10
 
 # LLM 上下文窗口安全限制（为模型最大上下文留出 4096 token 余量给 system prompt 和输出）
@@ -672,12 +672,12 @@ async def _download_failed_item_logs(
 async def _download_log_tail(
     log_base_url: str,
     log_path: str,
-    tail_lines: int = LOG_TAIL_LINES,
+    tail_chars: int = LOG_TAIL_CHARS,
     *,
     ftp_user: Optional[str] = None,
     ftp_password: Optional[str] = None,
 ) -> tuple[str, Optional[str]]:
-    """下载日志尾部。返回 (content, error_message)，成功时 error_message 为 None。"""
+    """下载日志尾部（按字符数截断）。返回 (content, error_message)，成功时 error_message 为 None。"""
     if not log_base_url or not log_path:
         return "", "log_base_url 或 log_path 为空"
     url = build_log_download_url(log_base_url, log_path)
@@ -693,7 +693,7 @@ async def _download_log_tail(
         if url.startswith("ftp://"):
             return await _download_log_tail_ftp(
                 url,
-                tail_lines,
+                tail_chars,
                 ftp_user=ftp_user,
                 ftp_password=ftp_password,
             )
@@ -724,8 +724,14 @@ async def _download_log_tail(
 
             if len(text) > MAX_LOG_BYTES:
                 text = text[-MAX_LOG_BYTES:]
-            lines = text.splitlines()
-            return "\n".join(lines[-tail_lines:] if len(lines) > tail_lines else lines), None
+            # 按字符数截断，优先保证行完整
+            if len(text) > tail_chars:
+                text = text[-tail_chars:]
+                # 去掉开头的半行
+                first_newline = text.find("\n")
+                if 0 <= first_newline < 100:
+                    text = text[first_newline + 1 :]
+            return text, None
     except httpx.HTTPStatusError as e:
         detail = (
             f"HTTP 日志下载失败: {e.response.status_code} {e.response.reason_phrase} "
@@ -793,15 +799,20 @@ def _ftp_has_explicit_credentials(
     return bool(ftp_user or ftp_password)
 
 
-def _tail_text(raw: bytes, tail_lines: int) -> str:
+def _tail_text(raw: bytes, tail_chars: int) -> str:
     text = raw.decode("utf-8", errors="replace")
     if len(text) > MAX_LOG_BYTES:
         text = text[-MAX_LOG_BYTES:]
-    lines = text.splitlines()
-    return "\n".join(lines[-tail_lines:] if len(lines) > tail_lines else lines)
+    # 按字符数截断，优先保证行完整
+    if len(text) > tail_chars:
+        text = text[-tail_chars:]
+        first_newline = text.find("\n")
+        if 0 <= first_newline < 100:
+            text = text[first_newline + 1 :]
+    return text
 
 
-async def _download_log_tail_ftp_urlopen(url: str, tail_lines: int) -> tuple[str, Optional[str]]:
+async def _download_log_tail_ftp_urlopen(url: str, tail_chars: int) -> tuple[str, Optional[str]]:
     """无凭据 FTP：与 download_ftp.py 一致，使用 urllib 直接拉取完整 URL。"""
     import urllib.request
 
@@ -812,7 +823,7 @@ async def _download_log_tail_ftp_urlopen(url: str, tail_lines: int) -> tuple[str
     try:
         loop = asyncio.get_event_loop()
         raw = await loop.run_in_executor(None, _fetch)
-        content = _tail_text(raw, tail_lines)
+        content = _tail_text(raw, tail_chars)
         logger.debug("FTP urllib 下载成功 url=%s bytes=%s", url, len(raw))
         return content, None
     except Exception as e:
@@ -823,7 +834,7 @@ async def _download_log_tail_ftp_urlopen(url: str, tail_lines: int) -> tuple[str
 
 async def _download_log_tail_ftp(
     url: str,
-    tail_lines: int,
+    tail_chars: int,
     *,
     ftp_user: Optional[str] = None,
     ftp_password: Optional[str] = None,
@@ -834,7 +845,7 @@ async def _download_log_tail_ftp(
     import io
 
     if not _ftp_has_explicit_credentials(url, ftp_user, ftp_password):
-        return await _download_log_tail_ftp_urlopen(url, tail_lines)
+        return await _download_log_tail_ftp_urlopen(url, tail_chars)
 
     parsed = urlparse(url)
     host = parsed.hostname or "localhost"
@@ -872,7 +883,7 @@ async def _download_log_tail_ftp(
             ftp.quit()
 
         await loop.run_in_executor(None, _ftp_download)
-        content = _tail_text(buf.getvalue(), tail_lines)
+        content = _tail_text(buf.getvalue(), tail_chars)
         logger.debug(
             "FTP ftplib 下载成功 host=%s path=%s bytes=%s",
             host,
@@ -1269,12 +1280,13 @@ async def diagnose_sn_stream(
         )
 
         await send_progress("llm", "正在调用大模型深度诊断...")
-        diagnosis = await llm_service.diagnose_sn(
+        diagnosis = await llm_service.diagnose_sn_stream(
             request.sn,
             device,
             llm_logs,
             maintenance,
             similar_cases,
+            send_token,
             kb_context=kb_context,
             failed_logs=failed_logs,
         )
