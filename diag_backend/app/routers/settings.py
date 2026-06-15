@@ -71,7 +71,9 @@ async def update_global_ai_config(
 
         update_data = {}
         if request.api_key is not None:
-            update_data["api_key"] = request.api_key
+            # 跳过脱敏后的假值（前端回传了 GET 返回的 sk-****xyz）
+            if "****" not in request.api_key:
+                update_data["api_key"] = request.api_key
         if request.base_url is not None:
             update_data["base_url"] = request.base_url
         if request.model is not None:
