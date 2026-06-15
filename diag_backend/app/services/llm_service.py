@@ -37,6 +37,132 @@ def _build_diagnosis_prompt(error_log: dict, knowledge_context: str, extra_hint:
 class LLMService:
     """LLM 服务封装 — 支持数据库配置热加载"""
 
+    # 模型上下文窗口配置（可通过数据库覆盖）
+    DEFAULT_MODEL_CONTEXT_LEN = 1000000
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """粗略估算 token 数量：中文约 1.5 token/字，英文约 0.25 token/字，混合取 2 字符/token"""
+        if not text:
+            return 0
+        total_chars = len(text)
+        # 统计中文字符数
+        chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+        # 中文字符约 1.5 token，非中文字符约 0.25 token
+        non_chinese = total_chars - chinese_chars
+        return int(chinese_chars * 1.5 + non_chinese * 0.25)
+
+    @staticmethod
+    def _truncate_text(text: str, max_chars: int) -> str:
+        """按字符数截断文本，尽量在段尾截断"""
+        if len(text) <= max_chars:
+            return text
+        # 尝试在段落末尾截断
+        truncated = text[:max_chars]
+        last_break = max(truncated.rfind("\n\n"), truncated.rfind("\n"), truncated.rfind("。"))
+        if last_break > max_chars * 0.7:
+            truncated = truncated[:last_break + 1]
+        return truncated + "\n\n[注：内容过长，已自动截断]"
+
+    def _build_prompt_with_truncation(self, sn: str, device_info: dict,
+                                       test_logs: list[dict], maintenance: list[dict],
+                                       similar_cases: list[dict], kb_context: str = "",
+                                       failed_logs: Optional[list[dict]] = None) -> str:
+        """构建诊断 prompt 并确保不超过模型上下文限制"""
+        system_prompt = "硬件诊断工程师"
+        system_tokens = self._estimate_tokens(system_prompt)
+        max_output = self._config.get("max_tokens", 28000)
+        # 模型上下文长度，加上 10000 的安全余量
+        context_len = self._config.get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN)
+        available_tokens = context_len - max_output - system_tokens - 10000
+        # 转换为字符预算（保守估计 2 字符/token）
+        char_budget = int(available_tokens * 2.0)
+
+        # 诊断要求模板（固定部分）
+        diagnosis_template = """## 诊断要求
+
+请综合以上所有信息，结合你作为硬件工程师的专业知识（包括但不限于：Intel/AMD CPU 架构、DDR4/DDR5 内存子系统、PCIe 总线、电源管理、散热设计、BMC/IPMI 管理、固件交互），进行深度诊断分析。
+
+如有知识库参考文档，优先参考其中的技术方案；对于知识库未覆盖的部分，请运用你自身的工程经验进行推理和补充。
+
+请以 JSON 格式返回（所有字段为必填）：
+```json
+{
+  "category": "故障大类（如：内存故障、电源故障、CPU故障、存储故障、网络故障、散热故障、固件/BIOS故障、组装工艺问题、其他）",
+  "summary": "一段 100-200 字的诊断摘要，概述核心发现和诊断结论",
+  "confidence": 0.0-1.0,
+  "root_cause_detail": "详细的根因分析（200-400字），包含故障机理、可能的原因链条、为什么排除其他可能性",
+  "affected_components": ["受影响的硬件组件列表，如CPU1_Socket、DIMM_A4、PSU2等，如无法确定则返回空数组"],
+  "suggestions": ["3-5 条维修建议，每条包含具体操作步骤，按优先级从高到低排序"],
+  "preventive_measures": ["2-3 条预防措施，说明如何避免同类问题再次发生"]
+}
+```"""
+        fixed_overhead = self._estimate_tokens(diagnosis_template)
+        char_budget -= int(fixed_overhead * 2.0)
+
+        # 动态分配各部分字符预算
+        # kb_context 和其他内容各占一半预算
+        content_budget = max(char_budget // 2, 500)
+        kb_budget = max(char_budget - content_budget, 1000)
+
+        # 构建各部分
+        truncated_kb = self._truncate_text(kb_context, kb_budget) if kb_context else ""
+
+        sections: list[str] = [
+            "你是一个资深的服务器硬件诊断工程师，拥有丰富的 x86 服务器、存储设备、网络设备故障排查经验。",
+            "请综合利用以下数据源以及你自身的硬件工程知识，对设备进行深度诊断分析：",
+        ]
+
+        # 失败用例 — 重点分析对象
+        failed = failed_logs or []
+        if failed:
+            lines = ["## 一、失败测试用例（重点分析）\n以下为该设备在 SIMS 测试中的失败项目："]
+            for fl in failed[:10]:
+                lines.append(f"- [{fl.get('test_time')}] {fl.get('test_item')}: {fl.get('fail_details', '异常')}")
+            sections.append("\n".join(lines))
+
+        # 知识库上下文
+        if truncated_kb:
+            sections.append(truncated_kb)
+
+        # 设备信息 + 完整日志 + 维修 + 案例（允许截断）
+        content_parts = [f"""## 二、设备背景信息
+- 设备 SN: {sn}
+- 型号: {device_info.get('model', '未知')}
+- 批次: {device_info.get('batch', '未知')}
+- 厂区: {device_info.get('factory', '未知')}
+
+## 三、全部测试日志（含通过项，用于全面了解设备状态）
+{chr(10).join([f"- [{tl.get('test_time')}] {tl.get('test_item')}: {tl.get('fail_details', '通过')}" for tl in test_logs[:10]])}
+
+## 四、历史维修记录
+{chr(10).join([f"- [{r.get('date')}] 更换 {r.get('component')}：{r.get('action')}" for r in maintenance[:5]]) if maintenance else "无历史维修记录"}
+
+## 五、相似历史案例
+{chr(10).join([f"- {c.get('title')}：根因={c.get('root_cause', '未知')}" for c in similar_cases[:3]]) if similar_cases else "未匹配到相似案例"}"""]
+        truncated_content = self._truncate_text("\n\n".join(content_parts), content_budget)
+        sections.append(truncated_content)
+
+        sections.append(diagnosis_template)
+        final_prompt = "\n\n".join(sections)
+
+        # 最终安全校验
+        estimated_total = self._estimate_tokens(final_prompt) + system_tokens
+        if estimated_total > context_len - max_output:
+            # 如果仍然超限，用更保守的策略重新裁剪
+            from logging import getLogger
+            getLogger(__name__).warning(
+                "prompt 仍超限，执行激进裁剪",
+                extra={"estimated_tokens": estimated_total, "limit": context_len - max_output, "sn": sn},
+            )
+            # 大幅减少内容
+            safe_budget = int((context_len - max_output - system_tokens - 10000) * 1.5)
+            sections[-2] = self._truncate_text(sections[-2], safe_budget // 3)
+            sections[-3] = self._truncate_text(sections[-3], safe_budget // 3)
+            final_prompt = "\n\n".join(sections)
+
+        return final_prompt
+
     def __init__(self):
         self.openai_client: Optional[AsyncOpenAI] = None
         self._config: dict = {
@@ -155,6 +281,7 @@ class LLMService:
             model=model or self._config["model"],
             messages=messages,
             temperature=temperature if temperature is not None else self._config["temperature"],
+            max_tokens=self._config.get("max_tokens", 28000),
         )).choices[0].message.content
 
     async def chat_completion_stream(
@@ -172,6 +299,7 @@ class LLMService:
             messages=messages,
             temperature=temperature if temperature is not None else self._config["temperature"],
             stream=True,
+            max_tokens=self._config.get("max_tokens", 28000),
         )
         chunks = []
         async for chunk in stream:
@@ -207,58 +335,9 @@ class LLMService:
                                     test_logs: list[dict], maintenance: list[dict],
                                     similar_cases: list[dict], kb_context: str = "",
                                     failed_logs: Optional[list[dict]] = None) -> str:
-        sections: list[str] = [
-            "你是一个资深的服务器硬件诊断工程师，拥有丰富的 x86 服务器、存储设备、网络设备故障排查经验。",
-            "请综合利用以下数据源以及你自身的硬件工程知识，对设备进行深度诊断分析：",
-        ]
-
-        # 失败用例 — 重点分析对象
-        failed = failed_logs or []
-        if failed:
-            lines = ["## 一、失败测试用例（重点分析）\n以下为该设备在 SIMS 测试中的失败项目："]
-            for fl in failed[:10]:
-                lines.append(f"- [{fl.get('test_time')}] {fl.get('test_item')}: {fl.get('fail_details', '异常')}")
-            sections.append("\n".join(lines))
-
-        # 知识库上下文
-        if kb_context:
-            sections.append(kb_context)
-
-        # 设备信息 + 完整日志 + 维修 + 案例
-        sections.append(f"""## 二、设备背景信息
-- 设备 SN: {sn}
-- 型号: {device_info.get('model', '未知')}
-- 批次: {device_info.get('batch', '未知')}
-- 厂区: {device_info.get('factory', '未知')}
-
-## 三、全部测试日志（含通过项，用于全面了解设备状态）
-{chr(10).join([f"- [{tl.get('test_time')}] {tl.get('test_item')}: {tl.get('fail_details', '通过')}" for tl in test_logs[:10]])}
-
-## 四、历史维修记录
-{chr(10).join([f"- [{r.get('date')}] 更换 {r.get('component')}：{r.get('action')}" for r in maintenance[:5]]) if maintenance else "无历史维修记录"}
-
-## 五、相似历史案例
-{chr(10).join([f"- {c.get('title')}：根因={c.get('root_cause', '未知')}" for c in similar_cases[:3]]) if similar_cases else "未匹配到相似案例"}""")
-
-        sections.append("""## 诊断要求
-
-请综合以上所有信息，结合你作为硬件工程师的专业知识（包括但不限于：Intel/AMD CPU 架构、DDR4/DDR5 内存子系统、PCIe 总线、电源管理、散热设计、BMC/IPMI 管理、固件交互），进行深度诊断分析。
-
-如有知识库参考文档，优先参考其中的技术方案；对于知识库未覆盖的部分，请运用你自身的工程经验进行推理和补充。
-
-请以 JSON 格式返回（所有字段为必填）：
-```json
-{
-  "category": "故障大类（如：内存故障、电源故障、CPU故障、存储故障、网络故障、散热故障、固件/BIOS故障、组装工艺问题、其他）",
-  "summary": "一段 100-200 字的诊断摘要，概述核心发现和诊断结论",
-  "confidence": 0.0-1.0,
-  "root_cause_detail": "详细的根因分析（200-400字），包含故障机理、可能的原因链条、为什么排除其他可能性",
-  "affected_components": ["受影响的硬件组件列表，如CPU1_Socket、DIMM_A4、PSU2等，如无法确定则返回空数组"],
-  "suggestions": ["3-5 条维修建议，每条包含具体操作步骤，按优先级从高到低排序"],
-  "preventive_measures": ["2-3 条预防措施，说明如何避免同类问题再次发生"]
-}
-```""")
-        return "\n\n".join(sections)
+        """构建 SN 诊断 prompt（委托给带截断的版本）"""
+        return self._build_prompt_with_truncation(
+            sn, device_info, test_logs, maintenance, similar_cases, kb_context, failed_logs)
 
     async def diagnose_sn(self, sn: str, device_info: dict, test_logs: list[dict],
                           maintenance: list[dict], similar_cases: list[dict],
