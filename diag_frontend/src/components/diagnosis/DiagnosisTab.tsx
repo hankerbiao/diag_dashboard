@@ -133,57 +133,53 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
     if (toastRef.current) dismiss(toastRef.current);
     toastRef.current = toast('loading', '正在诊断中...');
 
-    const controller = diagnosisApi.diagnoseBySNSse(
-      snVal,
-      factory,
-      (stage, detail) => {
-        if (reqId !== requestIdRef.current) return;
-        setProgress({ stage, detail });
-        if (stage !== 'llm') setStreamingToken('');
-      },
-      (data) => {
-        if (reqId !== requestIdRef.current) return;
-        // 诊断完成 -> 关闭 loading 提示，显示成功提示
-        if (toastRef.current) {
-          dismiss(toastRef.current);
-          toastRef.current = null;
-        }
-        toast('success', '诊断分析完成');
-        setResult(data);
-        setLoading(false);
-        setProgress(null);
-        setPersistWarning('');
-        void persistDiagnosis(reqId, snVal, factory, data);
-      },
-      (msg) => {
-        if (reqId !== requestIdRef.current) return;
-        // 诊断失败 -> 关闭 loading 提示，显示错误提示
-        if (toastRef.current) {
-          dismiss(toastRef.current);
-          toastRef.current = null;
-        }
-        const errorMsg = msg === '请求已取消' ? '诊断已取消' : msg;
-        toast('error', `诊断失败：${errorMsg}`);
-        setError(errorMsg);
-        setLoading(false);
-        setProgress(null);
-      },
-      (token) => {
-        if (reqId !== requestIdRef.current) return;
-        setStreamingToken((prev) => prev + token);
-      },
-    );
-    abortRef.current = controller;
-
     setLoading(true);
     setError('');
     setPersistWarning('');
     setResult(null);
-    setProgress(null);
+    setProgress({ stage: 'llm', detail: '正在调用大模型深度诊断...' });
     setStreamingToken('');
     setChatMessages([]);
     setHistoryId(null);
     setActiveHistoryId(null);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    diagnosisApi.diagnoseBySNAnalyze(snVal, factory).then((res) => {
+      if (reqId !== requestIdRef.current) return;
+      if (toastRef.current) {
+        dismiss(toastRef.current);
+        toastRef.current = null;
+      }
+      if (res.success && res.data) {
+        toast('success', '诊断分析完成');
+        setResult(res.data);
+        setLoading(false);
+        setProgress(null);
+        setStreamingToken('');
+        setPersistWarning('');
+        void persistDiagnosis(reqId, snVal, factory, res.data);
+      } else {
+        const errorMsg = res.error || '分析失败';
+        toast('error', `诊断失败：${errorMsg}`);
+        setError(errorMsg);
+        setLoading(false);
+        setProgress(null);
+      }
+    }).catch((e) => {
+      if (reqId !== requestIdRef.current) return;
+      if (toastRef.current) {
+        dismiss(toastRef.current);
+        toastRef.current = null;
+      }
+      const errorMsg = controller.signal.aborted ? '诊断已取消'
+        : e instanceof Error ? e.message : '网络连接中断';
+      toast('error', `诊断失败：${errorMsg}`);
+      setError(errorMsg);
+      setLoading(false);
+      setProgress(null);
+    });
   }, [sn, factory, persistDiagnosis, toast, dismiss]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLInputElement>) => {

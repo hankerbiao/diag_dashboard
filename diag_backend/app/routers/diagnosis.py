@@ -13,7 +13,6 @@ from typing import Awaitable, Callable, Optional
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
 
 from ..core.auth import get_current_user
 from ..core.factory_config import get_factory_by_id, load_factories_from_yaml
@@ -50,13 +49,6 @@ RAG_TOP_K = 10
 MAX_PROMPT_TOKENS = 28_000
 
 router = APIRouter(prefix="/diagnosis", tags=["诊断"])
-
-
-# ── SSE 工具 ──
-
-
-def _sse(event: str, data: dict) -> str:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 # ── 通用诊断 ──
@@ -969,197 +961,6 @@ def _truncate_to_budget(text: str, budget: int, label: str = "内容") -> str:
     return truncated
 
 
-async def _run_analysis(
-    error_log_id: str,
-    log_base_url: str,
-    send_progress: Callable[[str, str], Awaitable[None]],
-    send_token: Callable[[str], Awaitable[None]],
-    *,
-    context: Optional[ErrorLogAnalyzeContext] = None,
-) -> dict:
-    error_log = await _get_error_log_detail(error_log_id, context)
-    if not error_log:
-        if context and (context.server_sn or context.log_path):
-            logger.debug(
-                "异常日志未找到，使用前端上下文数据兜底",
-                extra={
-                    "error_log_id": error_log_id,
-                    "server_sn": context.server_sn or "",
-                    "has_log_path": bool(context.log_path),
-                },
-            )
-            error_log = {
-                "id": error_log_id,
-                "sn": context.server_sn or "",
-                "factory_id": context.factory_id or "",
-                "test_item": context.test_item,
-                "test_time": context.test_time,
-                "fail_details": context.fail_details,
-                "fault_type1": context.fault_type1,
-                "fault_type2": context.fault_type2,
-                "fault_type3": context.fault_type3,
-                "log_path": context.log_path,
-            }
-        else:
-            raise ValueError("未找到异常日志")
-
-    sn = error_log.get("sn", "")
-    log_path = (error_log.get("log_path") or "").strip()
-    resolved_url, ftp_user, ftp_password = _resolve_log_download_config(
-        log_base_url,
-        error_log.get("factory_id", ""),
-    )
-    log_tail = ""
-    sections: list[str] = []
-
-    if log_path:
-        await send_progress("download", "正在下载日志文件...")
-        if not resolved_url:
-            raise ValueError(
-                "该记录有日志路径但厂区 log_base_url 未配置，已中止 AI 诊断。"
-            )
-        log_tail, dl_error = await _download_log_tail(
-            resolved_url,
-            log_path,
-            ftp_user=ftp_user,
-            ftp_password=ftp_password,
-        )
-        if dl_error:
-            raise ValueError(f"日志下载失败，已中止 AI 诊断: {dl_error}")
-        if not log_tail.strip():
-            raise ValueError("日志下载成功但内容为空，已中止 AI 诊断。")
-        await send_progress("download", "日志下载完成")
-        sections.append(f"## 日志文件尾部内容\n```\n{log_tail}\n```")
-    else:
-        await send_progress("download", "无 log_path，跳过原文日志下载")
-
-    await send_progress("ragflow", "正在检索知识库...")
-    refs_result = []
-    try:
-        search_query = " ".join(
-            filter(
-                None,
-                [
-                    error_log.get("fail_details", ""),
-                    error_log.get("test_item", ""),
-                    error_log.get("fault_type1", ""),
-                    error_log.get("fault_type2", ""),
-                    error_log.get("fault_type3", ""),
-                ],
-            )
-        )
-        logger.debug(
-            "知识库检索 _run_analysis",
-            extra={"sn": sn, "search_query": search_query[:200]},
-        )
-        if search_query.strip():
-            result = await ragflow_service.search_knowledge_base(
-                question=search_query, top_k=RAG_TOP_K
-            )
-            refs = result.get("references", [])
-            logger.debug("知识库检索结果", extra={"sn": sn, "refs_count": len(refs)})
-            if refs:
-                seen = {}
-                for ref in refs:
-                    seen.setdefault(ref.get("doc_name", "未知"), []).append(
-                        ref.get("content", "")
-                    )
-                kb_lines = [
-                    "## 知识库参考文档\n从知识库中检索到的相关技术文档（已按文档去重）："
-                ]
-                for idx, (doc_name, chunks) in enumerate(seen.items(), 1):
-                    merged = "\n".join(chunks)
-                    kb_lines.append(
-                        f"\n[参考 {idx}] 来源: {doc_name}\n    内容: {merged}"
-                    )
-                    refs_result.append({"source": doc_name, "content": merged[:1000]})
-                sections.append("\n".join(kb_lines))
-            else:
-                sections.append("（知识库未检索到匹配内容）")
-        else:
-            sections.append("（无可用检索条件）")
-    except Exception as e:
-        logger.warning(
-            "知识库检索失败",
-            extra={
-                "sn": sn,
-                "search_query": search_query[:200] if search_query else None,
-                "error": str(e),
-                "error_type": type(e).__name__,
-            },
-            exc_info=True,
-        )
-        sections.append("（知识库检索异常）")
-
-    # ── 上下文 Token 预算截断 ──
-    max_tokens = llm_service.get_config_value("max_tokens", MAX_PROMPT_TOKENS)
-    # 预留 4096 token 给 system prompt + 输出
-    content_budget = max_tokens - 4096
-    full_text = "\n\n".join(sections)
-    estimated = _estimate_tokens(full_text)
-    if estimated > max_tokens:
-        logger.info(
-            "上下文超出 token 上限: estimated=%d limit=%d content_budget=%d",
-            estimated, max_tokens, content_budget,
-        )
-        truncated = []
-        log_section_idx = next(
-            (i for i, s in enumerate(sections) if s.startswith("## 日志文件尾部内容")),
-            None,
-        )
-        kb_section_idx = next(
-            (i for i, s in enumerate(sections) if s.startswith("## 知识库参考文档")),
-            None,
-        )
-        for i, sec in enumerate(sections):
-            if i == log_section_idx:
-                # 日志部分截断到预算的 60%
-                log_budget = int(content_budget * 0.6)
-                log_sec = _truncate_to_budget(sec, log_budget, "日志内容")
-                truncated.append(log_sec)
-            elif i == kb_section_idx:
-                # 知识库部分截断到预算的 30%
-                kb_budget = int(content_budget * 0.3)
-                kb_sec = _truncate_to_budget(sec, kb_budget, "知识库参考")
-                truncated.append(kb_sec)
-            else:
-                truncated.append(sec)
-        sections = truncated
-        logger.info("上下文截断完成: sections=%d", len(sections))
-
-    await send_progress("llm", "正在调用大模型深度诊断...")
-    analysis = await llm_service.analyze_with_knowledge_stream(
-        error_log, "\n\n".join(sections), send_token
-    )
-
-    now = utc_now_iso()
-    cache_doc = {
-        "error_log_id": error_log_id,
-        "sn": error_log.get("sn", ""),
-        "test_item": error_log.get("test_item", ""),
-        **analysis,
-        "knowledge_refs": list(
-            {
-                r["source"]: r
-                for r in (analysis.get("knowledge_refs") or refs_result)
-                if r.get("source")
-            }.values()
-        ),
-        "log_content": log_tail,
-        "created_at": now,
-    }
-    insert_result = await get_collection("diagnosis_cache").insert_one(cache_doc)
-
-    return _build_cache_response(
-        cache_doc,
-        error_log_id,
-        cache_doc["sn"],
-        cache_doc["test_item"],
-        now,
-        str(insert_result.inserted_id),
-    )
-
-
 # ── 路由 ──
 
 
@@ -1176,29 +977,201 @@ async def analyze_error_log_with_kb(
         context.server_sn if context else None,
         context.factory_id if context else None,
     )
-    cache_col = get_collection("diagnosis_cache")
-    cached = await cache_col.find_one({"error_log_id": error_log_id})
-    if cached:
-
-        async def _cached_stream():
-            yield _sse(
-                "done", {"success": True, "data": await _build_cached_response(cached)}
+    try:
+        # 检查缓存
+        cache_col = get_collection("diagnosis_cache")
+        cached = await cache_col.find_one({"error_log_id": error_log_id})
+        if cached:
+            return ApiResponse(
+                success=True, data=await _build_cached_response(cached)
             )
 
-        return StreamingResponse(_cached_stream(), media_type="text/event-stream")
+        # 运行分析（非流式）
+        error_log = await _get_error_log_detail(error_log_id, context)
+        if not error_log:
+            if context and (context.server_sn or context.log_path):
+                logger.debug(
+                    "异常日志未找到，使用前端上下文数据兜底",
+                    extra={
+                        "error_log_id": error_log_id,
+                        "server_sn": context.server_sn or "",
+                        "has_log_path": bool(context.log_path),
+                    },
+                )
+                error_log = {
+                    "id": error_log_id,
+                    "sn": context.server_sn or "",
+                    "factory_id": context.factory_id or "",
+                    "test_item": context.test_item,
+                    "test_time": context.test_time,
+                    "fail_details": context.fail_details,
+                    "fault_type1": context.fault_type1,
+                    "fault_type2": context.fault_type2,
+                    "fault_type3": context.fault_type3,
+                    "log_path": context.log_path,
+                }
+            else:
+                return ApiResponse(success=False, error="未找到异常日志")
 
-    async def _runner(send_progress, send_token):
-        return await _run_analysis(
-            error_log_id,
+        sn = error_log.get("sn", "")
+        log_path = (error_log.get("log_path") or "").strip()
+        resolved_url, ftp_user, ftp_password = _resolve_log_download_config(
             log_base_url,
-            send_progress,
-            send_token,
-            context=context,
+            error_log.get("factory_id", ""),
+        )
+        log_tail = ""
+        sections: list[str] = []
+
+        if log_path:
+            if not resolved_url:
+                return ApiResponse(
+                    success=False,
+                    error="该记录有日志路径但厂区 log_base_url 未配置，已中止 AI 诊断。",
+                )
+            log_tail, dl_error = await _download_log_tail(
+                resolved_url,
+                log_path,
+                ftp_user=ftp_user,
+                ftp_password=ftp_password,
+            )
+            if dl_error:
+                return ApiResponse(success=False, error=f"日志下载失败，已中止 AI 诊断: {dl_error}")
+            if not log_tail.strip():
+                return ApiResponse(success=False, error="日志下载成功但内容为空，已中止 AI 诊断。")
+            sections.append(f"## 日志文件尾部内容\n```\n{log_tail}\n```")
+
+        refs_result = []
+        try:
+            search_query = " ".join(
+                filter(
+                    None,
+                    [
+                        error_log.get("fail_details", ""),
+                        error_log.get("test_item", ""),
+                        error_log.get("fault_type1", ""),
+                        error_log.get("fault_type2", ""),
+                        error_log.get("fault_type3", ""),
+                    ],
+                )
+            )
+            logger.debug(
+                "知识库检索 _run_analysis",
+                extra={"sn": sn, "search_query": search_query[:200]},
+            )
+            if search_query.strip():
+                result = await ragflow_service.search_knowledge_base(
+                    question=search_query, top_k=RAG_TOP_K
+                )
+                refs = result.get("references", [])
+                logger.debug("知识库检索结果", extra={"sn": sn, "refs_count": len(refs)})
+                if refs:
+                    seen = {}
+                    for ref in refs:
+                        seen.setdefault(ref.get("doc_name", "未知"), []).append(
+                            ref.get("content", "")
+                        )
+                    kb_lines = [
+                        "## 知识库参考文档\n从知识库中检索到的相关技术文档（已按文档去重）："
+                    ]
+                    for idx, (doc_name, chunks) in enumerate(seen.items(), 1):
+                        merged = "\n".join(chunks)
+                        kb_lines.append(
+                            f"\n[参考 {idx}] 来源: {doc_name}\n    内容: {merged}"
+                        )
+                        refs_result.append({"source": doc_name, "content": merged[:1000]})
+                    sections.append("\n".join(kb_lines))
+                else:
+                    sections.append("（知识库未检索到匹配内容）")
+            else:
+                sections.append("（无可用检索条件）")
+        except Exception as e:
+            logger.warning(
+                "知识库检索失败",
+                extra={
+                    "sn": sn,
+                    "search_query": search_query[:200] if search_query else None,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
+            sections.append("（知识库检索异常）")
+
+        # 上下文 Token 预算截断
+        max_tokens = llm_service.get_config_value("max_tokens", MAX_PROMPT_TOKENS)
+        content_budget = max_tokens - 4096
+        full_text = "\n\n".join(sections)
+        estimated = _estimate_tokens(full_text)
+        if estimated > max_tokens:
+            logger.info(
+                "上下文超出 token 上限: estimated=%d limit=%d content_budget=%d",
+                estimated, max_tokens, content_budget,
+            )
+            truncated = []
+            log_section_idx = next(
+                (i for i, s in enumerate(sections) if s.startswith("## 日志文件尾部内容")),
+                None,
+            )
+            kb_section_idx = next(
+                (i for i, s in enumerate(sections) if s.startswith("## 知识库参考文档")),
+                None,
+            )
+            for i, sec in enumerate(sections):
+                if i == log_section_idx:
+                    log_budget = int(content_budget * 0.6)
+                    log_sec = _truncate_to_budget(sec, log_budget, "日志内容")
+                    truncated.append(log_sec)
+                elif i == kb_section_idx:
+                    kb_budget = int(content_budget * 0.3)
+                    kb_sec = _truncate_to_budget(sec, kb_budget, "知识库参考")
+                    truncated.append(kb_sec)
+                else:
+                    truncated.append(sec)
+            sections = truncated
+            logger.info("上下文截断完成: sections=%d", len(sections))
+
+        analysis = await llm_service.analyze_with_knowledge(
+            error_log, "\n\n".join(sections)
         )
 
-    return StreamingResponse(
-        _sse_wrap(_runner, "诊断分析失败"), media_type="text/event-stream"
-    )
+        now = utc_now_iso()
+        cache_doc = {
+            "error_log_id": error_log_id,
+            "sn": error_log.get("sn", ""),
+            "test_item": error_log.get("test_item", ""),
+            **analysis,
+            "knowledge_refs": list(
+                {
+                    r["source"]: r
+                    for r in (analysis.get("knowledge_refs") or refs_result)
+                    if r.get("source")
+                }.values()
+            ),
+            "log_content": log_tail,
+            "created_at": now,
+        }
+        insert_result = await get_collection("diagnosis_cache").insert_one(cache_doc)
+
+        result_data = _build_cache_response(
+            cache_doc,
+            error_log_id,
+            cache_doc["sn"],
+            cache_doc["test_item"],
+            now,
+            str(insert_result.inserted_id),
+        )
+        return ApiResponse(success=True, data=result_data)
+    except ValueError as e:
+        logger.warning(
+            "智能剖析参数错误",
+            extra={"error_log_id": error_log_id, "error": str(e)},
+        )
+        return ApiResponse(success=False, error=str(e))
+    except Exception as e:
+        logger.exception(
+            "智能剖析失败", extra={"error_log_id": error_log_id}
+        )
+        return ApiResponse(success=False, error=f"分析失败: {e}")
 
 
 @router.post("/error-log/{error_log_id}/re-analyze")
@@ -1214,62 +1187,6 @@ async def re_analyze_error_log(
     )
 
 
-# ── SSE 通用工具 ──
-
-
-async def _sse_wrap(
-    runner: Callable[
-        [Callable[[str, str], Awaitable[None]], Callable[[str], Awaitable[None]]],
-        Awaitable[dict],
-    ],
-    on_error_prefix: str = "诊断失败",
-):
-    """统一 SSE 流包装：创建队列 → 启动 runner → 产出 SSE 事件"""
-    queue: asyncio.Queue = asyncio.Queue()
-
-    async def _run():
-        async def _progress(stage: str, detail: str):
-            await queue.put(("progress", {"stage": stage, "detail": detail}))
-
-        async def _token(text: str):
-            await queue.put(("token", {"text": text}))
-
-        try:
-            result = await asyncio.wait_for(runner(_progress, _token), timeout=600.0)
-            logger.debug("SSE _run 完成，发送 done 事件")
-            await queue.put(("done", {"success": True, "data": result}))
-        except asyncio.TimeoutError:
-            logger.error("诊断超时（10分钟）", extra={"event": "diagnosis_timeout"})
-            await queue.put(
-                ("error", {"message": "诊断超时，大模型响应时间过长，请稍后重试"})
-            )
-        except asyncio.CancelledError:
-            logger.warning("SSE _run 被取消")
-            await queue.put(("error", {"message": "诊断被取消"}))
-        except Exception as e:
-            msg = str(e) if isinstance(e, ValueError) else f"{on_error_prefix}: {e}"
-            if isinstance(e, ValueError):
-                logger.warning(msg, exc_info=True)
-            else:
-                logger.exception(
-                    "诊断异常", extra={"error": str(e), "error_type": type(e).__name__}
-                )
-            logger.debug("SSE _run 异常，发送 error 事件: %s", msg)
-            await queue.put(("error", {"message": msg}))
-        finally:
-            logger.debug("SSE _run 结束")
-
-    task = asyncio.create_task(_run())
-    while True:
-        event_type, data = await queue.get()
-        yield _sse(event_type, data)
-        if event_type in ("done", "error"):
-            break
-    await task
-    # 短暂等待确保 SSE 数据已 flush 到客户端，避免前端在解析 done/error 事件前连接关闭
-    await asyncio.sleep(0.1)
-
-
 # ── SN 诊断 SSE ──
 
 
@@ -1277,7 +1194,7 @@ async def _sse_wrap(
 async def diagnose_sn_stream(
     request: DiagnosisBySNRequest, current_user: dict = Depends(get_current_user)
 ):
-    async def _runner(send_progress, send_token):
+    try:
         (
             device,
             llm_logs,
@@ -1286,27 +1203,45 @@ async def diagnose_sn_stream(
             similar_cases,
             kb_context,
             failed_logs,
-        ) = await _gather_sn_data(
-            request.sn, request.factory, on_progress=send_progress
-        )
+        ) = await _gather_sn_data(request.sn, request.factory)
 
-        await send_progress("llm", "正在调用大模型深度诊断...")
-        diagnosis = await llm_service.diagnose_sn_stream(
+        diagnosis = await llm_service.diagnose_sn(
             request.sn,
             device,
             llm_logs,
             maintenance,
             similar_cases,
-            send_token,
             kb_context=kb_context,
             failed_logs=failed_logs,
         )
 
-        return _build_sn_response(
-            request.sn, diagnosis, maintenance, all_logs, similar_cases, failed_logs
-        ).model_dump()
-
-    return StreamingResponse(_sse_wrap(_runner), media_type="text/event-stream")
+        logger.info(
+            "SN 诊断完成",
+            extra={
+                "sn": request.sn,
+                "factory": request.factory,
+                "test_logs_count": len(llm_logs),
+                "similar_cases_count": len(similar_cases),
+                "kb_context_length": len(kb_context) if kb_context else 0,
+            },
+        )
+        return ApiResponse(
+            success=True,
+            data=_build_sn_response(
+                request.sn, diagnosis, maintenance, all_logs, similar_cases, failed_logs
+            ),
+        )
+    except ValueError as e:
+        logger.warning(
+            "SN 诊断参数错误",
+            extra={"sn": request.sn, "factory": request.factory, "error": str(e)},
+        )
+        return ApiResponse(success=False, error=str(e))
+    except Exception as e:
+        logger.exception(
+            "SN 诊断失败", extra={"sn": request.sn, "factory": request.factory}
+        )
+        return ApiResponse(success=False, error=f"诊断失败: {e}")
 
 
 # ── SN 诊断历史记录 ──

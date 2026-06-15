@@ -236,54 +236,33 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
     if (!row) return;
     setAnalyzingId(id);
     setStreamingText('');
+    setAnalyzingProgress({ stage: 'llm', detail: '正在调用大模型深度诊断...' });
 
-    const params = logBaseUrl ? `?log_base_url=${encodeURIComponent(logBaseUrl)}` : '';
-    const encodedId = encodeURIComponent(id);
-    await diagnosisApi.analyzeSSE(
-      `/api/diagnosis/error-log/${encodedId}/analyze${params}`,
-      (_stage, detail) => setAnalyzingProgress({ stage: _stage, detail }),
-      (data) => {
-        setAnalysisResult((prev) => ({ ...prev, [id]: data }));
-        setAnalyzingId(null);
-        setAnalyzingProgress(null);
-        setStreamingText('');
-      },
-      (_message) => {
-        setAnalyzingId(null);
-        setAnalyzingProgress(null);
-        setStreamingText('');
-      },
-      (text) => setStreamingText((prev) => prev + text),
-      buildAnalyzeContext(row, factory, selectedServer?.server_sn),
-    );
+    const context = buildAnalyzeContext(row, factory, selectedServer?.server_sn);
+    const res = await diagnosisApi.analyzeErrorLogKB(id, logBaseUrl, context);
+    if (res.success && res.data) {
+      setAnalysisResult((prev) => ({ ...prev, [id]: res.data! }));
+    }
+    setAnalyzingId(null);
+    setAnalyzingProgress(null);
+    setStreamingText('');
   };
 
   const handleReAnalyze = async (id: string) => {
     const row = detailRows.find((r) => r.id === id);
     if (!row) return;
     setAnalyzingId(id);
-    setAnalyzingProgress(null);
+    setAnalyzingProgress({ stage: 'llm', detail: '正在调用大模型深度诊断...' });
     setStreamingText('');
 
-    const params = logBaseUrl ? `?log_base_url=${encodeURIComponent(logBaseUrl)}` : '';
-    const encodedId = encodeURIComponent(id);
-    await diagnosisApi.analyzeSSE(
-      `/api/diagnosis/error-log/${encodedId}/re-analyze${params}`,
-      (_stage, detail) => setAnalyzingProgress({ stage: _stage, detail }),
-      (data) => {
-        setAnalysisResult((prev) => ({ ...prev, [id]: data }));
-        setAnalyzingId(null);
-        setAnalyzingProgress(null);
-        setStreamingText('');
-      },
-      (_message) => {
-        setAnalyzingId(null);
-        setAnalyzingProgress(null);
-        setStreamingText('');
-      },
-      (text) => setStreamingText((prev) => prev + text),
-      buildAnalyzeContext(row, factory, selectedServer?.server_sn),
-    );
+    const context = buildAnalyzeContext(row, factory, selectedServer?.server_sn);
+    const res = await diagnosisApi.reAnalyzeErrorLog(id, logBaseUrl, context);
+    if (res.success && res.data) {
+      setAnalysisResult((prev) => ({ ...prev, [id]: res.data! }));
+    }
+    setAnalyzingId(null);
+    setAnalyzingProgress(null);
+    setStreamingText('');
   };
 
   const handleCloseModal = () => {
