@@ -1266,6 +1266,8 @@ async def _sse_wrap(
         if event_type in ("done", "error"):
             break
     await task
+    # 短暂等待确保 SSE 数据已 flush 到客户端，避免前端在解析 done/error 事件前连接关闭
+    await asyncio.sleep(0.1)
 
 
 # ── SN 诊断 SSE ──

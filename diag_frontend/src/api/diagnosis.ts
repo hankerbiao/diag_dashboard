@@ -63,6 +63,29 @@ async function consumeSSE<T>(resp: Response, callbacks: SSECallbacks<T>, signal?
         }
       }
     }
+    // stream 结束后，处理 buffer 中可能残留的未解析数据
+    if (!finished && buffer.trim()) {
+      const remaining = buffer;
+      buffer = '';
+      const remainingLines = remaining.split('\n');
+      let currentEvent = '';
+      for (const line of remainingLines) {
+        if (line.startsWith('event: ')) currentEvent = line.slice(7).trim();
+        else if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (currentEvent === 'done') {
+              finished = true;
+              if (data.success && data.data) onComplete(data.data);
+              else onError(data.message || '分析失败');
+            } else if (currentEvent === 'error') {
+              finished = true;
+              onError(data.message || '未知错误');
+            }
+          } catch { /* skip malformed */ }
+        }
+      }
+    }
     if (!finished) onError('连接意外结束，请重试');
   } catch (e) {
     if (signal?.aborted) onError('请求已取消');
