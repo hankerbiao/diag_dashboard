@@ -1269,13 +1269,12 @@ async def diagnose_sn_stream(
         )
 
         await send_progress("llm", "正在调用大模型深度诊断...")
-        diagnosis = await llm_service.diagnose_sn_stream(
+        diagnosis = await llm_service.diagnose_sn(
             request.sn,
             device,
             llm_logs,
             maintenance,
             similar_cases,
-            send_token,
             kb_context=kb_context,
             failed_logs=failed_logs,
         )
