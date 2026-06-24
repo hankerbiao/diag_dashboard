@@ -111,9 +111,10 @@ export default function FeedbackPanel({
             border: `1px solid ${selectedRating === 'solved' ? 'rgba(5, 150, 105, 0.4)' : 'transparent'}`,
             color: '#059669',
           }}
+          title="诊断结果准确，能直接解决问题"
         >
           <CheckCircle className="w-3.5 h-3.5" />
-          可以
+          可以解决
         </button>
 
         <button
@@ -125,8 +126,9 @@ export default function FeedbackPanel({
             border: `1px solid ${selectedRating === 'partially' ? 'rgba(217, 119, 6, 0.4)' : 'transparent'}`,
             color: '#d97706',
           }}
+          title="方向正确但细节有偏差，或只能解决部分问题"
         >
-          部分
+          部分参考
         </button>
 
         <button
@@ -138,9 +140,10 @@ export default function FeedbackPanel({
             border: `1px solid ${selectedRating === 'unsolved' ? 'rgba(220, 38, 38, 0.4)' : 'transparent'}`,
             color: '#dc2626',
           }}
+          title="诊断结果完全不对，无法帮助解决问题"
         >
           <XCircle className="w-3.5 h-3.5" />
-          没有
+          没有帮助
         </button>
       </div>
 
