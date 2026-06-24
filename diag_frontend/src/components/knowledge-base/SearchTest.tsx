@@ -76,8 +76,8 @@ function ResultList({ result, expandedIdx, onToggle }: {
               <span className="text-xs font-medium truncate max-w-[65%]" style={{ color: 'var(--color-text-secondary)' }}>{ref.doc_name || '未知文档'}</span>
               <span className="text-xs font-bold px-2 py-0.5 rounded shrink-0"
                 style={{
-                  backgroundColor: ref.similarity >= 0.7 ? '#d1fae5' : ref.similarity >= 0.4 ? '#fef3c7' : '#f1f5f9',
-                  color: ref.similarity >= 0.7 ? '#065f46' : ref.similarity >= 0.4 ? '#92400e' : '#475569',
+                  backgroundColor: ref.similarity >= 0.7 ? 'rgba(34,197,94,0.15)' : ref.similarity >= 0.4 ? 'rgba(234,179,8,0.15)' : 'rgba(100,116,139,0.15)',
+                  color: ref.similarity >= 0.7 ? '#22c55e' : ref.similarity >= 0.4 ? '#eab308' : 'var(--color-text-secondary)',
                 }}>
                 {formatSimilarity(ref.similarity)}
               </span>
@@ -124,7 +124,7 @@ export default function SearchTest({ compact }: SearchTestProps) {
       <SearchBar question={question} onChange={setQuestion} onKeyDown={handleKeyDown} onSearch={handleSearch} loading={loading} />
       <ParamTags />
       {error && (
-        <div className="flex items-center gap-2 text-xs rounded-md px-3 py-2" style={{ backgroundColor: '#fef2f2', color: '#ef4444', border: '1px solid #fecaca' }}>
+        <div className="flex items-center gap-2 text-xs rounded-md px-3 py-2" style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }}>
           <AlertCircle className="w-3.5 h-3.5 shrink-0" />{error}
         </div>
       )}

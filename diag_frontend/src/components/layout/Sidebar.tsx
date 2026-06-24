@@ -19,13 +19,14 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
       className="w-56 text-white flex flex-col shadow-xl z-20 shrink-0"
       style={{ backgroundColor: 'var(--color-bg-sidebar)' }}
     >
-      <div
-        className="h-[60px] flex items-center px-4 border-b shrink-0 select-none"
+      <button
+        onClick={() => onTabChange('diagnosis')}
+        className="h-[60px] flex items-center px-4 border-b shrink-0 select-none w-full text-left cursor-pointer hover:opacity-80 transition-opacity"
         style={{ borderColor: 'var(--color-border-sidebar)' }}
       >
         <Bot className="w-6 h-6 text-blue-400 mr-2 shrink-0" />
         <span className="font-bold text-[15px] tracking-wide text-white">WeaveEye</span>
-      </div>
+      </button>
 
       <div className="flex-1 py-5 flex flex-col gap-1.5 px-3">
         <div
@@ -36,6 +37,7 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
         </div>
         {navItems.map((item) => (
           <NavItem
+            key={item.tab}
             icon={item.icon}
             label={item.label}
             active={activeTab === item.tab}
