@@ -227,7 +227,7 @@ export default function AnalysisModal({
                       <h5 className="flex items-center gap-1.5 text-xs font-bold" style={{ color: '#d97706' }}>
                         <Terminal className="w-3.5 h-3.5" /> 关键证据
                       </h5>
-                      <ul className="text-[12px] space-y-3 p-3.5 rounded-lg border shadow-sm font-mono" style={S.mono}>
+                      <ul className="text-[12px] space-y-3 p-3.5 rounded-lg border shadow-sm font-mono break-all" style={S.mono}>
                         {result.evidence.map((e, i) => (
                           <li key={i} className="leading-relaxed">
                             <div className="flex gap-2">
@@ -265,7 +265,7 @@ export default function AnalysisModal({
                     <h5 className="flex items-center gap-1.5 text-xs font-bold text-emerald-700">
                       <Wrench className="w-3.5 h-3.5" /> 修复工程指引
                     </h5>
-                    <ul className="text-[13px] space-y-2 p-4 rounded-lg border shadow-sm"
+                    <ul className="text-[13px] space-y-2 p-4 rounded-lg border shadow-sm break-all"
                       style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'rgba(16,185,129,0.2)', color: 'var(--color-text-primary)' }}>
                       {result.repair_suggestions.map((s, i) => (
                         <li key={i} className="flex gap-2">

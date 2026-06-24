@@ -1,5 +1,5 @@
 import { useState, useEffect, useImperativeHandle, forwardRef } from 'react';
-import { Sliders, Key, Loader2, CheckCircle2, AlertCircle, Cpu } from 'lucide-react';
+import { Sliders, Key, Loader2, CheckCircle2, AlertCircle, Cpu, Brain, Clock } from 'lucide-react';
 import { settingsApi } from '../../api/fastapi';
 
 export interface ApiConfigHandle {
@@ -14,10 +14,12 @@ interface ApiConfigProps {
 const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
   ({ onErrorMessage, onSuccessMessage }, ref) => {
     const [apiKey, setApiKey] = useState('');
-    const [baseUrl, setBaseUrl] = useState('https://api.openai.com/v1');
-    const [model, setModel] = useState('gpt-4-turbo');
-    const [temperature, setTemperature] = useState(0.7);
-    const [maxTokens, setMaxTokens] = useState(28000);
+    const [baseUrl, setBaseUrl] = useState('');
+    const [model, setModel] = useState('');
+    const [temperature, setTemperature] = useState<number | null>(null);
+    const [maxTokens, setMaxTokens] = useState<number | null>(null);
+    const [enableThinking, setEnableThinking] = useState(false);
+    const [timeout, setTimeout_] = useState<number | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
@@ -26,10 +28,12 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
       settingsApi.getAiConfig().then((resp) => {
         if (resp.success && resp.data) {
           setApiKey(resp.data.api_key);
-          setBaseUrl(resp.data.base_url || 'https://api.openai.com/v1');
-          setModel(resp.data.model || 'gpt-4-turbo');
-          setTemperature(resp.data.temperature ?? 0.7);
-          setMaxTokens(resp.data.max_tokens ?? 28000);
+          setBaseUrl(resp.data.base_url || '');
+          setModel(resp.data.model || '');
+          setTemperature(resp.data.temperature);
+          setMaxTokens(resp.data.max_tokens);
+          setEnableThinking(resp.data.chat_template_kwargs?.enable_thinking ?? false);
+          setTimeout_(resp.data.timeout);
         }
       }).catch(() => {
         // 保持默认值
@@ -41,13 +45,16 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
       save: async () => {
         setSaving(true);
         try {
-          const resp = await settingsApi.updateAiConfig({
+          const body: Record<string, unknown> = {
             api_key: apiKey,
             base_url: baseUrl,
             model,
-            temperature,
-            max_tokens: maxTokens,
-          });
+          };
+          if (temperature !== null) body.temperature = temperature;
+          if (maxTokens !== null) body.max_tokens = maxTokens;
+          if (timeout !== null) body.timeout = timeout;
+          body.chat_template_kwargs = { enable_thinking: enableThinking };
+          const resp = await settingsApi.updateAiConfig(body as any);
           if (resp.success) {
             onSuccessMessage?.('AI 大模型配置已更新');
             return true;
@@ -211,22 +218,20 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
                     color: 'var(--color-accent)',
                   }}
                 >
-                  {maxTokens.toLocaleString()}
+                  {maxTokens !== null ? maxTokens.toLocaleString() : '—'}
                 </span>
               </label>
               <input
                 type="number"
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(Math.max(4096, parseInt(e.target.value) || 28000))}
+                value={maxTokens ?? ''}
+                onChange={(e) => setMaxTokens(e.target.value ? Math.max(1, parseInt(e.target.value) || 0) : null)}
                 className="w-full h-11 border rounded-lg px-4 text-sm outline-none transition-all shadow-sm font-mono"
                 style={{
                   borderColor: 'var(--color-border)',
                   backgroundColor: 'var(--color-bg-primary)',
                   color: 'var(--color-text-primary)',
                 }}
-                min={4096}
-                max={131072}
-                step={1024}
+                min={1}
                 placeholder="28000"
               />
               <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
@@ -247,7 +252,7 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
                     color: 'var(--color-accent)',
                   }}
                 >
-                  {temperature.toFixed(2)}
+                  {temperature !== null ? temperature.toFixed(2) : '—'}
                 </span>
               </label>
               <div className="flex items-center gap-4 h-11">
@@ -256,12 +261,78 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
                   min="0"
                   max="2"
                   step="0.1"
-                  value={temperature}
+                  value={temperature ?? 0.7}
                   onChange={(e) => setTemperature(parseFloat(e.target.value))}
                   className="flex-1 outline-none"
                   style={{ accentColor: 'var(--color-accent)' }}
                 />
               </div>
+            </div>
+          </div>
+
+          <div
+            className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t"
+            style={{ borderColor: 'var(--color-border)' }}
+          >
+            <div className="space-y-3">
+              <label
+                className="flex items-center gap-2 text-[13px] font-bold tracking-wide"
+                style={{ color: 'var(--color-text-primary)' }}
+              >
+                <Brain className="w-4 h-4" style={{ color: 'var(--color-accent)' }} />
+                深度思考模式
+              </label>
+              <label
+                className="relative inline-flex items-center cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={enableThinking}
+                  onChange={(e) => setEnableThinking(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div
+                  className="w-11 h-6 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"
+                  style={{
+                    backgroundColor: enableThinking ? 'var(--color-accent)' : 'var(--color-border)',
+                  }}
+                ></div>
+                <span
+                  className="ms-3 text-sm font-medium"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  {enableThinking ? '开启' : '关闭'}
+                </span>
+              </label>
+              <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                开启后模型会展示思考过程，关闭可加快响应速度并减少 Token 消耗
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label
+                className="flex items-center gap-2 text-[13px] font-bold tracking-wide"
+                style={{ color: 'var(--color-text-primary)' }}
+              >
+                <Clock className="w-4 h-4" style={{ color: 'var(--color-accent)' }} />
+                请求超时时间 (秒)
+              </label>
+              <input
+                type="number"
+                value={timeout ?? ''}
+                onChange={(e) => setTimeout_(e.target.value ? Math.max(10, parseInt(e.target.value) || 0) : null)}
+                className="w-full h-11 border rounded-lg px-4 text-sm outline-none transition-all shadow-sm font-mono"
+                style={{
+                  borderColor: 'var(--color-border)',
+                  backgroundColor: 'var(--color-bg-primary)',
+                  color: 'var(--color-text-primary)',
+                }}
+                min={10}
+                placeholder="300"
+              />
+              <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                建议 60-600 秒，模型推理时间较长时可适当增加
+              </p>
             </div>
           </div>
         </div>

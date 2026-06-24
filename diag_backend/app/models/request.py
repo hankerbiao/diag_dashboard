@@ -54,6 +54,8 @@ class GlobalAiConfigUpdateRequest(BaseModel):
     temperature: Optional[float] = None
     provider: Optional[str] = None
     max_tokens: Optional[int] = None
+    chat_template_kwargs: Optional[dict] = None
+    timeout: Optional[int] = None
 
 
 class ReAnalyzeRequest(BaseModel):

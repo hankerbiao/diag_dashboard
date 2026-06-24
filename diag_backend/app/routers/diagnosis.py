@@ -1098,14 +1098,17 @@ async def analyze_error_log_with_kb(
             sections.append("（知识库检索异常）")
 
         # 上下文 Token 预算截断
-        max_tokens = llm_service.get_config_value("max_tokens", MAX_PROMPT_TOKENS)
-        content_budget = max_tokens - 4096
+        max_tokens = llm_service.get_config_value("max_tokens", MAX_PROMPT_TOKENS) or MAX_PROMPT_TOKENS
+        context_len = llm_service.get_config_value("model_context_len", 1000000) or 1000000
+        safe_max_output = min(max_tokens, int(context_len * 0.7), context_len - 4096)
+        safe_max_output = max(safe_max_output, 1024)
+        content_budget = safe_max_output - 4096
         full_text = "\n\n".join(sections)
         estimated = _estimate_tokens(full_text)
-        if estimated > max_tokens:
+        if estimated > safe_max_output:
             logger.info(
                 "上下文超出 token 上限: estimated=%d limit=%d content_budget=%d",
-                estimated, max_tokens, content_budget,
+                estimated, safe_max_output, content_budget,
             )
             truncated = []
             log_section_idx = next(

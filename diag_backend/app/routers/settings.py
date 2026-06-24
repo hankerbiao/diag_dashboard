@@ -33,9 +33,11 @@ async def get_global_ai_config(current_user: dict = Depends(get_current_user)):
                     "api_key": _mask_api_key(config.get("api_key", "")),
                     "base_url": config.get("base_url", ""),
                     "model": config.get("model", ""),
-                    "temperature": config.get("temperature", 0.7),
-                    "max_tokens": config.get("max_tokens", 28000),
-                    "provider": config.get("provider", "openai"),
+                    "temperature": config.get("temperature"),
+                    "max_tokens": config.get("max_tokens"),
+                    "chat_template_kwargs": config.get("chat_template_kwargs"),
+                    "timeout": config.get("timeout"),
+                    "provider": config.get("provider", ""),
                     "updated_at": config.get("updated_at", ""),
                     "updated_by": config.get("updated_by", ""),
                 }
@@ -48,9 +50,11 @@ async def get_global_ai_config(current_user: dict = Depends(get_current_user)):
                 "api_key": "",
                 "base_url": "",
                 "model": "",
-                "temperature": 0.7,
-                "max_tokens": 28000,
-                "provider": "openai",
+                "temperature": None,
+                "max_tokens": None,
+                "chat_template_kwargs": None,
+                "timeout": None,
+                "provider": "",
                 "updated_at": "",
                 "updated_by": "",
             }
@@ -84,6 +88,10 @@ async def update_global_ai_config(
             update_data["provider"] = request.provider
         if request.max_tokens is not None:
             update_data["max_tokens"] = request.max_tokens
+        if request.chat_template_kwargs is not None:
+            update_data["chat_template_kwargs"] = request.chat_template_kwargs
+        if request.timeout is not None:
+            update_data["timeout"] = request.timeout
 
         update_data["updated_by"] = current_user["id"]
         update_data["updated_at"] = utc_now_iso()

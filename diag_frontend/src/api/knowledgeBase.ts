@@ -40,7 +40,7 @@ export const knowledgeBaseApi = {
 
 export const settingsApi = {
   async getAiConfig() { return fetchApi<GlobalAiConfig>('/api/settings/ai-config'); },
-  async updateAiConfig(config: { api_key?: string; base_url?: string; model?: string; temperature?: number; max_tokens?: number }) {
+  async updateAiConfig(config: { api_key?: string; base_url?: string; model?: string; temperature?: number; max_tokens?: number; chat_template_kwargs?: { enable_thinking: boolean }; timeout?: number }) {
     return fetchApi<void>('/api/settings/ai-config', { method: 'PUT', body: JSON.stringify(config) });
   },
 };

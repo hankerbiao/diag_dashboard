@@ -11,6 +11,7 @@ import BatchTestCharts from './charts/BatchTestCharts';
 import SupportHint from '../common/SupportHint';
 import { buildYieldTrendFromDaily } from './utils/buildYieldTrend';
 import type { DailyStatItem } from '../../api/analytics';
+import { useToast } from '../../contexts/ToastContext';
 
 interface ErrorLogsTabProps {
   factory: string;
@@ -34,6 +35,8 @@ function buildAnalyzeContext(row: ErrorLogRow, factoryId: string, fallbackSn?: s
 }
 
 export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProps) {
+  const { toast } = useToast();
+
   // 搜索
   const [sn, setSn] = useState('');
   const [productModels, setProductModels] = useState('');
@@ -242,6 +245,8 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
     const res = await diagnosisApi.analyzeErrorLogKB(id, logBaseUrl, context);
     if (res.success && res.data) {
       setAnalysisResult((prev) => ({ ...prev, [id]: res.data! }));
+    } else {
+      toast('error', res.error || '分析失败');
     }
     setAnalyzingId(null);
     setAnalyzingProgress(null);
@@ -259,6 +264,8 @@ export default function ErrorLogsTab({ factory, factorySites }: ErrorLogsTabProp
     const res = await diagnosisApi.reAnalyzeErrorLog(id, logBaseUrl, context);
     if (res.success && res.data) {
       setAnalysisResult((prev) => ({ ...prev, [id]: res.data! }));
+    } else {
+      toast('error', res.error || '分析失败');
     }
     setAnalyzingId(null);
     setAnalyzingProgress(null);

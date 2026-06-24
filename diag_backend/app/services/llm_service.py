@@ -3,7 +3,7 @@ import json
 import re
 
 import httpx
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 
 DEVICE_INFO_TPL = """## 设备信息
 - 设备 SN: {sn}
@@ -73,10 +73,13 @@ class LLMService:
         """构建诊断 prompt 并确保不超过模型上下文限制"""
         system_prompt = "硬件诊断工程师"
         system_tokens = self._estimate_tokens(system_prompt)
-        max_output = self._config.get("max_tokens", 28000)
         # 模型上下文长度，加上 10000 的安全余量
         context_len = self._config.get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN)
-        available_tokens = context_len - max_output - system_tokens - 10000
+        max_output = self._config.get("max_tokens", 28000) or 28000
+        # 安全限制：max_output 不超过上下文窗口的 70%，且至少留 4096 给 prompt
+        safe_max_output = min(max_output, int(context_len * 0.7), context_len - 4096)
+        safe_max_output = max(safe_max_output, 1024)
+        available_tokens = context_len - safe_max_output - system_tokens - 10000
         # 转换为字符预算（保守估计 2 字符/token）
         char_budget = int(available_tokens * 2.0)
 
@@ -150,15 +153,15 @@ class LLMService:
 
         # 最终安全校验
         estimated_total = self._estimate_tokens(final_prompt) + system_tokens
-        if estimated_total > context_len - max_output:
+        if estimated_total > context_len - safe_max_output:
             # 如果仍然超限，用更保守的策略重新裁剪
             from logging import getLogger
             getLogger(__name__).warning(
                 "prompt 仍超限，执行激进裁剪",
-                extra={"estimated_tokens": estimated_total, "limit": context_len - max_output, "sn": sn},
+                extra={"estimated_tokens": estimated_total, "limit": context_len - safe_max_output, "sn": sn},
             )
             # 大幅减少内容
-            safe_budget = int((context_len - max_output - system_tokens - 10000) * 1.5)
+            safe_budget = int((context_len - safe_max_output - system_tokens - 10000) * 1.5)
             sections[-2] = self._truncate_text(sections[-2], safe_budget // 3)
             sections[-3] = self._truncate_text(sections[-3], safe_budget // 3)
             final_prompt = "\n\n".join(sections)
@@ -167,13 +170,7 @@ class LLMService:
 
     def __init__(self):
         self.openai_client: Optional[AsyncOpenAI] = None
-        self._config: dict = {
-            "api_key": "",
-            "base_url": "https://api.openai.com/v1",
-            "model": "gpt-4-turbo",
-            "temperature": 0.7,
-            "max_tokens": 28000,
-        }
+        self._config: dict = {}
         self._loaded = False
 
     # ------------------------------------------------------------------
@@ -182,21 +179,20 @@ class LLMService:
 
     async def _load_config_from_db(self) -> dict:
         """从 MongoDB 加载 AI 配置"""
-        try:
-            from ..core.mongodb import get_collection
-            col = get_collection("global_app_config")
-            config = await col.find_one({"_id": "ai_config"})
-            if config:
-                return {
-                    "api_key": config.get("api_key", ""),
-                    "base_url": config.get("base_url", "https://api.openai.com/v1"),
-                    "model": config.get("model", "gpt-4-turbo"),
-                    "temperature": config.get("temperature", 0.7),
-                    "max_tokens": config.get("max_tokens", 28000),
-                }
-        except Exception:
-            pass
-        return {"api_key": "", "base_url": "", "model": "gpt-4-turbo", "temperature": 0.7, "max_tokens": 28000}
+        from ..core.mongodb import get_collection
+        col = get_collection("global_app_config")
+        config = await col.find_one({"_id": "ai_config"})
+        if config and config.get("api_key"):
+            return {
+                "api_key": config.get("api_key", ""),
+                "base_url": config.get("base_url", ""),
+                "model": config.get("model", ""),
+                "temperature": config.get("temperature", 0.0),
+                "max_tokens": config.get("max_tokens", 0),
+                "chat_template_kwargs": config.get("chat_template_kwargs", {"enable_thinking": False}),
+                "timeout": config.get("timeout", 0),
+            }
+        raise RuntimeError("AI 配置未初始化，请先在设置页面配置 LLM 参数")
 
     async def _ensure_configured(self):
         """懒加载配置（仅在无预设客户端时执行一次）"""
@@ -209,14 +205,12 @@ class LLMService:
         """根据当前 _config 重建 AsyncOpenAI 客户端"""
         key = self._config.get("api_key", "")
         url = self._config.get("base_url", "")
-        if key:
-            kwargs = {"api_key": key}
-            if url:
-                kwargs["base_url"] = url
-            kwargs["timeout"] = httpx.Timeout(300.0, connect=10.0, read=120.0)
-            self.openai_client = AsyncOpenAI(**kwargs)
-        else:
-            self.openai_client = None
+        timeout = self._config.get("timeout", 300) or 300
+        kwargs = {"api_key": key}
+        if url:
+            kwargs["base_url"] = url
+        kwargs["timeout"] = httpx.Timeout(timeout, connect=10.0, read=timeout)
+        self.openai_client = AsyncOpenAI(**kwargs)
 
     async def reload_config(self):
         """从数据库重新加载配置（热加载）"""
@@ -233,43 +227,6 @@ class LLMService:
         return self._config.get(key, default)
 
     # ------------------------------------------------------------------
-    # Mock 响应（无可用 LLM 时的降级路径）
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _mock_response(messages: list[dict]) -> str:
-        """无可用大模型时返回 Mock 诊断结果"""
-        content = " ".join(m.get("content", "") for m in messages if m.get("content"))
-
-        if "诊断" in content or "SN" in content.upper():
-            return json.dumps({
-                "category": "硬件故障",
-                "summary": "模拟诊断：设备存在潜在硬件异常，建议进行深度检测",
-                "confidence": 0.85,
-                "suggestions": [
-                    "检查电源模块供电稳定性",
-                    "验证主控芯片信号完整性",
-                    "排查连接器接触不良问题",
-                    "运行完整老化测试",
-                ],
-            }, ensure_ascii=False)
-
-        if "分析" in content or "错误" in content:
-            return json.dumps({
-                "root_cause": "模拟分析：测试环境异常导致",
-                "analysis": "经综合分析，该故障可能由测试治具接触不良引起，建议清洁后重新测试。",
-                "repair_suggestions": [
-                    "清洁测试探针及连接器",
-                    "重新校准测试治具",
-                    "更换同批次测试线缆",
-                ],
-            }, ensure_ascii=False)
-
-        return json.dumps({
-            "response": f"收到请求：{content[:50]}{'...' if len(content) > 50 else ''}",
-        }, ensure_ascii=False)
-
-    # ------------------------------------------------------------------
     # LLM 调用
     # ------------------------------------------------------------------
 
@@ -277,32 +234,56 @@ class LLMService:
         self, messages: list[dict], model: Optional[str] = None, temperature: Optional[float] = None,
     ) -> str:
         await self._ensure_configured()
-        if not self.openai_client:
-            return self._mock_response(messages)
-        return (await self.openai_client.chat.completions.create(
-            model=model or self._config["model"],
-            messages=messages,
-            temperature=temperature if temperature is not None else self._config["temperature"],
-            max_tokens=self._config.get("max_tokens", 28000),
-        )).choices[0].message.content
+        extra_kwargs = {}
+        chat_template_kwargs = self._config.get("chat_template_kwargs")
+        if chat_template_kwargs:
+            extra_kwargs["extra_body"] = chat_template_kwargs
+
+        # 自动限制 max_tokens：不超过模型上下文窗口的 70%，且至少保留 4096 token 给 prompt
+        context_len = self._config.get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN)
+        max_output = self._config.get("max_tokens", 28000) or 28000
+        safe_max_output = min(max_output, int(context_len * 0.7), context_len - 4096)
+        safe_max_output = max(safe_max_output, 1024)  # 至少 1024
+
+        try:
+            return (await self.openai_client.chat.completions.create(
+                model=model or self._config["model"],
+                messages=messages,
+                temperature=temperature if temperature is not None else self._config["temperature"],
+                max_tokens=safe_max_output,
+                **extra_kwargs,
+            )).choices[0].message.content
+        except BadRequestError as e:
+            detail = e.body.get("error", {}).get("message", str(e)) if isinstance(e.body, dict) else str(e)
+            raise RuntimeError(f"LLM 请求被拒绝: {detail}") from e
 
     async def chat_completion_stream(
         self, messages: list[dict], token_cb: Callable[[str], Awaitable[None]],
         model: Optional[str] = None, temperature: Optional[float] = None,
     ) -> str:
         await self._ensure_configured()
-        if not self.openai_client:
-            result = self._mock_response(messages)
-            for token in result:
-                await token_cb(token)
-            return result
-        stream = await self.openai_client.chat.completions.create(
-            model=model or self._config["model"],
-            messages=messages,
-            temperature=temperature if temperature is not None else self._config["temperature"],
-            stream=True,
-            max_tokens=self._config.get("max_tokens", 28000),
-        )
+        extra_kwargs = {"stream": True}
+        chat_template_kwargs = self._config.get("chat_template_kwargs")
+        if chat_template_kwargs:
+            extra_kwargs["extra_body"] = chat_template_kwargs
+
+        # 自动限制 max_tokens：不超过模型上下文窗口的 70%，且至少保留 4096 token 给 prompt
+        context_len = self._config.get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN)
+        max_output = self._config.get("max_tokens", 28000) or 28000
+        safe_max_output = min(max_output, int(context_len * 0.7), context_len - 4096)
+        safe_max_output = max(safe_max_output, 1024)
+
+        try:
+            stream = await self.openai_client.chat.completions.create(
+                model=model or self._config["model"],
+                messages=messages,
+                temperature=temperature if temperature is not None else self._config["temperature"],
+                max_tokens=safe_max_output,
+                **extra_kwargs,
+            )
+        except BadRequestError as e:
+            detail = e.body.get("error", {}).get("message", str(e)) if isinstance(e.body, dict) else str(e)
+            raise RuntimeError(f"LLM 请求被拒绝: {detail}") from e
         chunks = []
         async for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None

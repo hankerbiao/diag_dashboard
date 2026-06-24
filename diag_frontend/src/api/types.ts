@@ -82,8 +82,10 @@ export interface KnowledgeDoc {
 }
 
 export interface GlobalAiConfig {
-  api_key: string; base_url: string; model: string; temperature: number;
-  max_tokens: number; provider: string; updated_at: string; updated_by: string;
+  api_key: string; base_url: string; model: string;
+  temperature: number | null; max_tokens: number | null;
+  provider: string; chat_template_kwargs: { enable_thinking: boolean } | null;
+  timeout: number | null; updated_at: string; updated_by: string;
 }
 
 export type DiagnosisRating = 'solved' | 'partially' | 'unsolved';
