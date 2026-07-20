@@ -5,6 +5,11 @@ import re
 import httpx
 from openai import AsyncOpenAI, BadRequestError
 
+from .log_extractor import (
+    LOG_EXTRACTION_SYSTEM_PROMPT,
+    LOG_EXTRACTION_USER_PROMPT_TPL,
+)
+
 DEVICE_INFO_TPL = """## 设备信息
 - 设备 SN: {sn}
 - 测试项目: {test_item}
@@ -401,6 +406,65 @@ class LLMService:
                 for item in result["evidence"]
             ]
         return result
+
+    # ──────────────────────────────────────────────────────────────
+    # AI 级日志提取
+    # ──────────────────────────────────────────────────────────────
+
+    LOG_EXTRACTION_FALLBACK = {
+        "errors": [],
+        "summary": "AI 日志提取失败",
+        "has_critical_errors": False,
+        "suggested_root_cause": "",
+    }
+
+    async def extract_log_with_llm(
+        self,
+        raw_log_text: str,
+        encoding_stats: Optional[dict] = None,
+    ) -> dict:
+        """
+        使用 LLM 从原始日志中提取关键错误信息（AI 级精炼）。
+
+        这是两级提取策略的第二级：
+        - 第一级：编码级提取（ContextExtractor），快速定位候选错误行
+        - 第二级（本方法）：LLM 精炼，去噪、归类、输出结构化结果
+
+        Args:
+            raw_log_text: 原始日志文本（编码提取后的段落，非完整日志）
+            encoding_stats: 编码提取阶段的统计信息（可选）
+
+        Returns:
+            dict: {"errors": [...], "summary": str, "has_critical_errors": bool,
+                   "suggested_root_cause": str}
+        """
+        stats_info = ""
+        if encoding_stats:
+            stats_info = (
+                f"编码级预扫描信息：\n"
+                f"- 总行数: {encoding_stats.get('total_lines', '?')}\n"
+                f"- 匹配错误行: {encoding_stats.get('matched_lines', '?')}\n"
+                f"- 段落数: {encoding_stats.get('paragraphs', '?')}\n"
+            )
+
+        user_prompt = LOG_EXTRACTION_USER_PROMPT_TPL.format(
+            total_lines=encoding_stats.get("total_lines", "?"),
+            total_chars=encoding_stats.get("total_chars", "?"),
+            matched_lines=encoding_stats.get("matched_lines", "?"),
+            paragraphs=encoding_stats.get("paragraphs", "?"),
+            log_text=raw_log_text,
+        )
+
+        try:
+            response = await self.chat_completion([
+                {"role": "system", "content": LOG_EXTRACTION_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ])
+            return self._parse_json_response(response, self.LOG_EXTRACTION_FALLBACK)
+        except Exception as e:
+            logger = __import__("logging").getLogger(__name__)
+            logger.warning("AI 日志提取失败 error=%s", e)
+            return dict(self.LOG_EXTRACTION_FALLBACK, summary=f"AI 日志提取异常: {e}")
 
 
 llm_service = LLMService()

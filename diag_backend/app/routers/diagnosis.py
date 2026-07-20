@@ -37,6 +37,7 @@ from ..services.llm_service import llm_service
 from ..services.knowledge_graph import knowledge_graph
 from ..services.mes_direct_service import MESDirectService, MESRequestError
 from ..services import ragflow_service
+from ..services.log_extractor import ContextExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -598,6 +599,167 @@ def _resolve_log_download_config(
     )
 
 
+# ── 智能日志提取（替代原本的简单 tail 截断） ──
+
+
+async def _download_and_extract_log(
+    log_base_url: str,
+    log_path: str,
+    *,
+    ftp_user: Optional[str] = None,
+    ftp_password: Optional[str] = None,
+    extraction_mode: str = "balanced",
+) -> tuple[str, dict]:
+    """
+    下载日志文件并执行两级提取。
+
+    第 1 级 — 编码级上下文提取（ContextExtractor）：
+      基于正则模式匹配，快速定位错误/异常行，提取上下文窗口。
+      无 AI 开销，毫秒级完成。
+
+    第 2 级 — AI 级精炼（可选，由外部调用方决定）：
+      如果编码结果仍超预算，可再调用 llm_service.extract_log_with_llm()。
+
+    返回:
+        (extracted_text, stats_dict)
+        stats_dict 包含 matched_lines/paragraphs/total_lines 等统计信息，
+        可用于提示词中的上下文标注。
+    """
+    from ..services.log_extractor import extract_log_context
+
+    # 下载完整日志
+    content, dl_error = await _download_log_tail_fetch_full(
+        log_base_url,
+        log_path,
+        ftp_user=ftp_user,
+        ftp_password=ftp_password,
+    )
+    if dl_error:
+        return "", {"error": dl_error, "matched_lines": 0, "paragraphs": 0, "total_lines": 0}
+    if not content.strip():
+        return "", {"error": "日志内容为空", "matched_lines": 0, "paragraphs": 0, "total_lines": 0}
+
+    # 编码级上下文提取
+    extracted, stats = extract_log_context(content, mode=extraction_mode)
+
+    return extracted, stats
+
+
+async def _download_log_tail_fetch_full(
+    log_base_url: str,
+    log_path: str,
+    *,
+    ftp_user: Optional[str] = None,
+    ftp_password: Optional[str] = None,
+) -> tuple[str, Optional[str]]:
+    """
+    获取日志完整内容（供智能提取使用），使用 MAX_LOG_BYTES 安全上限。
+    与 _download_log_tail 共享底层下载逻辑但不做尾部截断。
+    """
+    from ..core.utils import build_log_download_url, validate_log_path
+
+    if not log_base_url or not log_path:
+        return "", "log_base_url 或 log_path 为空"
+    url = build_log_download_url(log_base_url, log_path)
+    if not url:
+        return "", "log_base_url 或 log_path 为空"
+
+    try:
+        if url.startswith("ftp://"):
+            return await _download_ftp_full(url, ftp_user=ftp_user, ftp_password=ftp_password)
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            text = resp.text
+
+            # HTML 日志转纯文本
+            if url.endswith(".html"):
+                try:
+                    from lxml import html as lxml_html
+                    tree = lxml_html.fromstring(text)
+                    for tag in ("script", "style"):
+                        for elem in list(tree.iter(tag)):
+                            elem.drop_tree()
+                    lines = [ln for ln in tree.text_content().strip().splitlines() if ln.strip()]
+                    return "\n".join(lines), None
+                except Exception as e:
+                    logger.warning(
+                        "HTML 解析失败 url=%s error_type=%s error=%s",
+                        url, type(e).__name__, e,
+                    )
+
+            # 安全截断（2MB 上限）
+            if len(text) > MAX_LOG_BYTES:
+                text = text[-MAX_LOG_BYTES:]
+                logger.info("日志超出 %d 字节上限，已截断尾部 url=%s", MAX_LOG_BYTES, url)
+
+            return text, None
+
+    except httpx.HTTPStatusError as e:
+        detail = f"HTTP 日志下载失败: {e.response.status_code} {e.response.reason_phrase} url={url}"
+        logger.warning("%s body_preview=%s", detail, (e.response.text or "")[:200])
+        return "", detail
+    except httpx.RequestError as e:
+        detail = f"HTTP 日志下载网络错误 url={url} error={type(e).__name__}: {e}"
+        logger.warning(detail)
+        return "", detail
+    except Exception as e:
+        detail = f"日志下载失败 url={url} error={type(e).__name__}: {e}"
+        logger.warning(detail)
+        return "", detail
+
+
+async def _download_ftp_full(
+    url: str,
+    *,
+    ftp_user: Optional[str] = None,
+    ftp_password: Optional[str] = None,
+) -> tuple[str, Optional[str]]:
+    """FTP 下载日志完整内容（供智能提取使用）。"""
+    from urllib.parse import urlparse, unquote
+    import ftplib
+    import io
+
+    if not _ftp_has_explicit_credentials(url, ftp_user, ftp_password):
+        return await _download_log_tail_ftp_urlopen(url, MAX_LOG_BYTES)
+
+    parsed = urlparse(url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 21
+    path = unquote(parsed.path or "")
+    auth_user = unquote(parsed.username) if parsed.username else (ftp_user or "anonymous")
+    auth_password = (
+        unquote(parsed.password) if parsed.password is not None
+        else (ftp_password if ftp_password is not None else "")
+    )
+
+    try:
+        loop = asyncio.get_event_loop()
+        buf = io.BytesIO()
+
+        def _ftp_download():
+            ftp = ftplib.FTP()
+            ftp.connect(host, port, timeout=30)
+            ftp.login(auth_user, auth_password)
+            ftp.retrbinary(f"RETR {path}", buf.write)
+            ftp.quit()
+
+        await loop.run_in_executor(None, _ftp_download)
+        raw = buf.getvalue()
+        text = raw.decode("utf-8", errors="replace")
+        if len(text) > MAX_LOG_BYTES:
+            text = text[-MAX_LOG_BYTES:]
+            logger.info("FTP 日志超出 %d 字节上限，已截断尾部 url=%s", MAX_LOG_BYTES, url)
+        return text, None
+    except Exception as e:
+        detail = _describe_ftp_error(e, host=host, port=port, path=path,
+                                      auth_user=auth_user,
+                                      used_anonymous=(auth_user == "anonymous"))
+        logger.warning(detail)
+        return "", detail
+
+
 async def _download_failed_item_logs(
     *,
     log_base_url: str,
@@ -608,7 +770,7 @@ async def _download_failed_item_logs(
     on_progress: Optional[Callable[[str, str], Awaitable[None]]] = None,
     max_files: int = 5,
 ) -> str:
-    """下载失败项原文日志；若存在 log_path 但全部失败则中止 SN 诊断。"""
+    """下载失败项原文日志（使用智能提取替代简单 tail 截断）；若存在 log_path 但全部失败则中止 SN 诊断。"""
     with_path = [fl for fl in failed_logs if (fl.get("log_path") or "").strip()]
     if not with_path:
         return ""
@@ -621,29 +783,42 @@ async def _download_failed_item_logs(
     if on_progress:
         await on_progress(
             "logfiles",
-            f"正在下载失败项原文日志（最多 {min(len(with_path), max_files)} 个）...",
+            f"正在下载并提取失败项原文日志（最多 {min(len(with_path), max_files)} 个）...",
         )
 
     blocks: list[str] = []
     errors: list[str] = []
+    total_stats: dict = {"matched_lines": 0, "paragraphs": 0, "total_lines": 0}
 
     for fl in with_path[:max_files]:
         log_path = (fl.get("log_path") or "").strip()
-        content, dl_error = await _download_log_tail(
+        # 使用智能提取（编码级上下文提取）替代原本的 tail 截断
+        extracted, stats = await _download_and_extract_log(
             log_base_url,
             log_path,
             ftp_user=ftp_user,
             ftp_password=ftp_password,
+            extraction_mode="balanced",
         )
+        dl_error = stats.get("error")
         if dl_error:
             errors.append(f"{fl.get('test_item', log_path)}: {dl_error}")
             continue
-        if not content.strip():
+        if not extracted.strip():
             errors.append(f"{fl.get('test_item', log_path)}: 日志内容为空")
             continue
+
+        # 累加统计
+        total_stats["matched_lines"] += stats.get("matched_lines", 0)
+        total_stats["paragraphs"] += stats.get("paragraphs", 0)
+        total_stats["total_lines"] += stats.get("total_lines", 0)
+
         blocks.append(
             f"### [{fl.get('test_time', '')}] {fl.get('test_item', '')}\n"
-            f"路径: {log_path}\n```\n{content}\n```"
+            f"路径: {log_path}\n"
+            f"（编码扫描: {stats.get('matched_lines', 0)} 个错误行 / "
+            f"{stats.get('paragraphs', 0)} 个段落 / 共 {stats.get('total_lines', 0)} 行）\n"
+            f"```\n{extracted}\n```"
         )
 
     if not blocks:
@@ -653,12 +828,12 @@ async def _download_failed_item_logs(
         raise ValueError(f"失败项原文日志全部下载失败，已中止 AI 诊断: {detail}")
 
     if on_progress:
-        msg = f"已下载 {len(blocks)} 份失败项原文日志"
+        msg = f"已提取 {len(blocks)} 份失败项原文日志"
         if errors:
             msg += f"（{len(errors)} 条下载失败已跳过）"
         await on_progress("logfiles", msg)
 
-    return "\n\n## 失败项原文日志（SIMS log_path）\n" + "\n\n".join(blocks)
+    return "\n\n## 失败项原文日志（SIMS log_path — 编码级上下文提取）\n" + "\n\n".join(blocks)
 
 
 async def _download_log_tail(
@@ -1020,6 +1195,7 @@ async def analyze_error_log_with_kb(
             error_log.get("factory_id", ""),
         )
         log_tail = ""
+        log_stats: dict = {}
         sections: list[str] = []
 
         if log_path:
@@ -1028,17 +1204,29 @@ async def analyze_error_log_with_kb(
                     success=False,
                     error="该记录有日志路径但厂区 log_base_url 未配置，已中止 AI 诊断。",
                 )
-            log_tail, dl_error = await _download_log_tail(
+            # 使用智能提取（编码级上下文提取）替代原本的 tail 截断
+            extracted, stats = await _download_and_extract_log(
                 resolved_url,
                 log_path,
                 ftp_user=ftp_user,
                 ftp_password=ftp_password,
+                extraction_mode="balanced",
             )
+            dl_error = stats.get("error")
             if dl_error:
                 return ApiResponse(success=False, error=f"日志下载失败，已中止 AI 诊断: {dl_error}")
-            if not log_tail.strip():
+            if not extracted.strip():
                 return ApiResponse(success=False, error="日志下载成功但内容为空，已中止 AI 诊断。")
-            sections.append(f"## 日志文件尾部内容\n```\n{log_tail}\n```")
+            # 将提取结果存入 log_tail（兼容原有缓存结构）
+            log_tail = extracted
+            log_stats = stats
+            stat_line = (
+                f"（编码扫描: {stats.get('matched_lines', 0)} 个错误行 / "
+                f"{stats.get('paragraphs', 0)} 个段落 / 共 {stats.get('total_lines', 0)} 行）"
+            )
+            sections.append(
+                f"## 日志文件内容（编码级上下文提取）\n{stat_line}\n```\n{extracted}\n```"
+            )
 
         refs_result = []
         try:
@@ -1112,7 +1300,7 @@ async def analyze_error_log_with_kb(
             )
             truncated = []
             log_section_idx = next(
-                (i for i, s in enumerate(sections) if s.startswith("## 日志文件尾部内容")),
+                (i for i, s in enumerate(sections) if s.startswith("## 日志文件内容")),
                 None,
             )
             kb_section_idx = next(
@@ -1133,8 +1321,9 @@ async def analyze_error_log_with_kb(
             sections = truncated
             logger.info("上下文截断完成: sections=%d", len(sections))
 
+        error_count = log_stats.get("matched_lines", 0) if log_path else 0
         analysis = await llm_service.analyze_with_knowledge(
-            error_log, "\n\n".join(sections)
+            error_log, "\n\n".join(sections), error_count=error_count
         )
 
         now = utc_now_iso()
@@ -1151,6 +1340,7 @@ async def analyze_error_log_with_kb(
                 }.values()
             ),
             "log_content": log_tail,
+            "log_extraction_stats": log_stats if log_path else {},
             "created_at": now,
         }
         insert_result = await get_collection("diagnosis_cache").insert_one(cache_doc)
