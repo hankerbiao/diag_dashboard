@@ -17,7 +17,17 @@ export interface DiagnosisResult {
   maintenance_history: Array<{ id: string; date: string; component: string; action: string }>;
   test_logs: TestLogItem[];
   failed_test_logs?: TestLogItem[];
+  failed_log_files?: FailedLogFile[];
   similar_cases: SimilarCaseItem[];
+}
+
+export interface FailedLogFile {
+  test_item: string;
+  test_time: string;
+  log_path: string;
+  extracted_content: string;
+  matched_lines: number;
+  total_lines: number;
 }
 
 export interface SnHistoryItem {

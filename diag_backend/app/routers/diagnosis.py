@@ -59,8 +59,12 @@ async def _gather_sn_data(
     sn: str,
     factory: str,
     on_progress: Optional[Callable[[str, str], Awaitable[None]]] = None,
-) -> tuple[dict, list[dict], list[dict], list[dict], list[dict], str, list[dict]]:
-    """收集 SN 诊断所需数据。返回 (device, llm_logs, maintenance, all_logs, similar_cases, kb_context, failed_logs)"""
+) -> tuple[dict, list[dict], list[dict], list[dict], list[dict], str, list[dict], list[dict]]:
+    """收集 SN 诊断所需数据。
+
+    Returns:
+        (device, llm_logs, maintenance, all_logs, similar_cases, kb_context, failed_logs, failed_log_files)
+    """
     async def _progress(s: str, d: str):
         if on_progress:
             await on_progress(s, d)
@@ -180,7 +184,7 @@ async def _gather_sn_data(
 
     llm_logs = all_logs
 
-    log_file_context = await _download_failed_item_logs(
+    log_file_context, failed_log_files = await _download_failed_item_logs(
         log_base_url=factory_cfg.get("log_base_url", ""),
         failed_logs=failed_logs,
         factory_label=factory_label,
@@ -258,6 +262,7 @@ async def _gather_sn_data(
         similar_cases,
         kb_context,
         failed_logs,
+        failed_log_files,
     )
 
 
@@ -286,6 +291,7 @@ def _build_sn_response(
     all_logs: list[dict],
     similar_cases: list[dict],
     failed_logs: Optional[list[dict]] = None,
+    failed_log_files: Optional[list[dict]] = None,
 ) -> DiagnosisResponse:
     return DiagnosisResponse(
         sn=sn,
@@ -308,6 +314,7 @@ def _build_sn_response(
         ],
         test_logs=_map_test_log_items(all_logs[:10]),
         failed_test_logs=_map_test_log_items((failed_logs or [])[:20]),
+        failed_log_files=failed_log_files or [],
         similar_cases=[
             dict(
                 id=c.get("id", ""),
@@ -333,6 +340,7 @@ async def diagnose_by_sn(
             similar_cases,
             kb_context,
             failed_logs,
+            failed_log_files,
         ) = await _gather_sn_data(request.sn, request.factory)
         diagnosis = await llm_service.diagnose_sn(
             request.sn,
@@ -351,12 +359,13 @@ async def diagnose_by_sn(
                 "test_logs_count": len(llm_logs),
                 "similar_cases_count": len(similar_cases),
                 "kb_context_length": len(kb_context) if kb_context else 0,
+                "failed_log_files": len(failed_log_files),
             },
         )
         return ApiResponse(
             success=True,
             data=_build_sn_response(
-                request.sn, diagnosis, maintenance, all_logs, similar_cases, failed_logs
+                request.sn, diagnosis, maintenance, all_logs, similar_cases, failed_logs, failed_log_files
             ),
         )
     except ValueError as e:
@@ -769,11 +778,18 @@ async def _download_failed_item_logs(
     ftp_password: Optional[str] = None,
     on_progress: Optional[Callable[[str, str], Awaitable[None]]] = None,
     max_files: int = 5,
-) -> str:
-    """下载失败项原文日志（使用智能提取替代简单 tail 截断）；若存在 log_path 但全部失败则中止 SN 诊断。"""
+) -> tuple[str, list[dict]]:
+    """下载失败项原文日志（使用智能提取替代简单 tail 截断）。
+
+    Returns:
+        (markdown_block, failed_log_files)
+        - markdown_block: 拼入 kb_context 的 Markdown 字符串
+        - failed_log_files: 每项含 {test_item, test_time, log_path,
+          extracted_content, matched_lines, total_lines}
+    """
     with_path = [fl for fl in failed_logs if (fl.get("log_path") or "").strip()]
     if not with_path:
-        return ""
+        return "", []
 
     if not log_base_url:
         raise ValueError(
@@ -788,7 +804,7 @@ async def _download_failed_item_logs(
 
     blocks: list[str] = []
     errors: list[str] = []
-    total_stats: dict = {"matched_lines": 0, "paragraphs": 0, "total_lines": 0}
+    failed_log_files: list[dict] = []
 
     for fl in with_path[:max_files]:
         log_path = (fl.get("log_path") or "").strip()
@@ -808,10 +824,15 @@ async def _download_failed_item_logs(
             errors.append(f"{fl.get('test_item', log_path)}: 日志内容为空")
             continue
 
-        # 累加统计
-        total_stats["matched_lines"] += stats.get("matched_lines", 0)
-        total_stats["paragraphs"] += stats.get("paragraphs", 0)
-        total_stats["total_lines"] += stats.get("total_lines", 0)
+        # 收集每项日志文件信息（供前端下载）
+        failed_log_files.append({
+            "test_item": fl.get("test_item", ""),
+            "test_time": str(fl.get("test_time", "")),
+            "log_path": log_path,
+            "extracted_content": extracted,
+            "matched_lines": stats.get("matched_lines", 0),
+            "total_lines": stats.get("total_lines", 0),
+        })
 
         blocks.append(
             f"### [{fl.get('test_time', '')}] {fl.get('test_item', '')}\n"
@@ -833,7 +854,8 @@ async def _download_failed_item_logs(
             msg += f"（{len(errors)} 条下载失败已跳过）"
         await on_progress("logfiles", msg)
 
-    return "\n\n## 失败项原文日志（SIMS log_path — 编码级上下文提取）\n" + "\n\n".join(blocks)
+    markdown = "\n\n## 失败项原文日志（SIMS log_path — 编码级上下文提取）\n" + "\n\n".join(blocks)
+    return markdown, failed_log_files
 
 
 async def _download_log_tail(
@@ -1396,6 +1418,7 @@ async def diagnose_sn_stream(
             similar_cases,
             kb_context,
             failed_logs,
+            failed_log_files,
         ) = await _gather_sn_data(request.sn, request.factory)
 
         diagnosis = await llm_service.diagnose_sn(
@@ -1416,12 +1439,13 @@ async def diagnose_sn_stream(
                 "test_logs_count": len(llm_logs),
                 "similar_cases_count": len(similar_cases),
                 "kb_context_length": len(kb_context) if kb_context else 0,
+                "failed_log_files": len(failed_log_files),
             },
         )
         return ApiResponse(
             success=True,
             data=_build_sn_response(
-                request.sn, diagnosis, maintenance, all_logs, similar_cases, failed_logs
+                request.sn, diagnosis, maintenance, all_logs, similar_cases, failed_logs, failed_log_files
             ),
         )
     except ValueError as e:

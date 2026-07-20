@@ -42,6 +42,16 @@ class TestLogItem(BaseModel):
     log_path: str = ""
 
 
+class FailedLogFile(BaseModel):
+    """被 AI 分析引用的失败日志文件信息（含提取内容，供前端下载）"""
+    test_item: str
+    test_time: str
+    log_path: str
+    extracted_content: str          # 智能提取后的日志内容
+    matched_lines: int = 0          # 匹配到的错误行数
+    total_lines: int = 0            # 日志总行数
+
+
 class SimilarCaseItem(BaseModel):
     id: str
     title: str
@@ -62,6 +72,7 @@ class DiagnosisResponse(BaseModel):
     maintenance_history: list[MaintenanceRecord]
     test_logs: list[TestLogItem] = []
     failed_test_logs: list[TestLogItem] = []
+    failed_log_files: list[FailedLogFile] = []
     similar_cases: list[SimilarCaseItem] = []
 
 

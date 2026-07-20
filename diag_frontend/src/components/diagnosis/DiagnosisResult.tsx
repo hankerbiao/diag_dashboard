@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Bot, Activity, AlertTriangle, Wrench, Terminal, ChevronDown, ChevronRight, Loader2, Cpu, Shield, History, BookOpen } from 'lucide-react';
-import type { DiagnosisResult as DiagnosisResultType, TestLogItem } from '../../api/fastapi';
+import { Bot, Activity, AlertTriangle, Wrench, Terminal, ChevronDown, ChevronRight, Loader2, Cpu, Shield, History, BookOpen, Download } from 'lucide-react';
+import type { DiagnosisResult as DiagnosisResultType, TestLogItem, FailedLogFile } from '../../api/fastapi';
 import { diagnosisApi } from '../../api/fastapi';
 import ResultBadge from '../common/ResultBadge';
 import FeedbackPanel from '../common/FeedbackPanel';
@@ -114,6 +114,46 @@ function RawLogRow({ log, factory, sn }: { log: TestLogItem; factory: string; sn
     </div>
   );
 }
+
+
+/** 被 AI 分析的日志文件下载行 */
+function LogFileDownloadRow({ logFile }: { logFile: FailedLogFile }) {
+  const filename = `${logFile.test_time.replace(/[/\\:]/g, '-')}_${logFile.test_item.replace(/[/\\:]/g, '_')}.log`;
+  return (
+    <div className="flex items-center justify-between px-4 py-3 text-[12px]">
+      <div className="flex-1 min-w-0">
+        <div className="font-medium truncate" style={{ color: 'var(--color-text-primary)' }}>{logFile.test_item}</div>
+        <div className="mt-0.5 flex items-center gap-3" style={{ color: 'var(--color-text-muted)' }}>
+          <span className="font-mono">{logFile.test_time}</span>
+          <span>{logFile.matched_lines} 个错误行 / {logFile.total_lines} 行</span>
+        </div>
+      </div>
+      <button
+        onClick={() => downloadTextAsFile(logFile.extracted_content, filename)}
+        className="shrink-0 text-[11px] px-3 py-1.5 rounded-lg border font-bold transition-colors flex items-center gap-1.5 hover:opacity-80"
+        style={{ borderColor: 'var(--color-border)', color: 'var(--color-accent)', backgroundColor: 'var(--color-bg-secondary)' }}
+      >
+        <Download className="w-3.5 h-3.5" />
+        下载
+      </button>
+    </div>
+  );
+}
+
+
+/** 将文本内容作为文件下载 */
+function downloadTextAsFile(content: string, filename: string) {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 
 export default function DiagnosisResult({ result, factory, historyId }: DiagnosisResultProps) {
   const catStyle = getCategoryStyle(result.category);
@@ -369,6 +409,26 @@ export default function DiagnosisResult({ result, factory, historyId }: Diagnosi
                 >
                   {failedLogs.map((log) => (
                     <RawLogRow key={log.id} log={log} factory={factory} sn={result.sn} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 被 AI 分析的日志文件下载 */}
+            {result.failed_log_files && result.failed_log_files.length > 0 && (
+              <div className="space-y-3 pt-2">
+                <h3
+                  className="text-xs font-bold uppercase tracking-widest flex items-center gap-2"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  <Download className="w-4 h-4 text-blue-400" /> 被 AI 分析的日志文件
+                </h3>
+                <div
+                  className="rounded-xl border overflow-hidden shadow-sm divide-y"
+                  style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}
+                >
+                  {result.failed_log_files.map((lf, idx) => (
+                    <LogFileDownloadRow key={lf.log_path || idx} logFile={lf} />
                   ))}
                 </div>
               </div>

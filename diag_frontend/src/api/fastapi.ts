@@ -2,7 +2,7 @@
 export { fetchApi, API_BASE_URL, type ApiResponse } from './fetch';
 export { getAccessToken } from './auth';
 export type {
-  TestLogItem, SimilarCaseItem, DiagnosisResult, SnHistoryItem, SnHistoryDetail,
+  TestLogItem, SimilarCaseItem, DiagnosisResult, FailedLogFile, SnHistoryItem, SnHistoryDetail,
   ErrorAnalysis, DiagnosisCache, FactorySite, SyncServer, SyncTestDetail,
   PaginatedResponse,
   FaultCategoryItem, YieldTrendItem, StationFailureItem, DecisionDistributionItem,
