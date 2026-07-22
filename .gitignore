@@ -1,3 +1,25 @@
+# OS / Editor
+.DS_Store
+**/.DS_Store
+._*
+**/._*
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+build/
+dist/
+coverage/
+htmlcov/
+vite.svg
+
 # Python
 __pycache__/
 *.py[cod]
@@ -6,42 +28,38 @@ __pycache__/
 .Python
 *.egg
 *.egg-info/
-dist/
-build/
 .eggs/
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.ruff/
+.hypothesis/
+.tox/
+.nox/
+.cache/
 
 # Virtual environments
+.venv/
 venv/
 ENV/
 env/
-.venv/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# macOS (match any directory)
-.DS_Store
-**/.DS_Store
-.DS_Store?
-._*
-**/._*
-
-# Scripts specific
-scripts/.ruff_cache/
-scripts/downloaded_docs/
-scripts/data/
 
 # Logs
 *.log
+logs/
 
 # Environment files
 .env
-.env.local
-.env.*.local
+.env.*
 !.env.example
-docker/.env
+!.env.template
+
+# Project-specific generated data
+scripts/.ruff_cache/
+scripts/downloaded_docs/
+scripts/data/
 scripts/sync_config.yaml
+docker/.env
+openapi.json
+swagger.json

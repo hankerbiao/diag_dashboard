@@ -1,8 +1,25 @@
+# Dependencies
 node_modules/
-build/
+
+# Build outputs
 dist/
+build/
 coverage/
-.DS_Store
-*.log
-.env*
+.vite/
+vite.svg
+*.tsbuildinfo
+
+# Local runtime / env
+.env
+.env.*
 !.env.example
+!.env.template
+
+# Editor / OS / logs
+.DS_Store
+.idea/
+.vscode/
+*.log
+*.swp
+*.swo
+*~
