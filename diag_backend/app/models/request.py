@@ -56,6 +56,19 @@ class GlobalAiConfigUpdateRequest(BaseModel):
     max_tokens: Optional[int] = None
     chat_template_kwargs: Optional[dict] = None
     timeout: Optional[int] = None
+    # 错误日志提取模型（快速）配置；留空则复用上方回答模型配置
+    extraction_api_key: Optional[str] = None
+    extraction_base_url: Optional[str] = None
+    extraction_model: Optional[str] = None
+    extraction_max_tokens: Optional[int] = None
+    extraction_timeout: Optional[int] = None
+
+
+class LogExtractionPromptRequest(BaseModel):
+    """按机型配置的错误日志提取 prompt。model="default" 表示默认 prompt。"""
+    model: str = Field(..., min_length=1)
+    system_prompt: str = Field(..., min_length=1)
+    user_template: str = Field(..., min_length=1)
 
 
 class ReAnalyzeRequest(BaseModel):

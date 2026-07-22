@@ -11,11 +11,24 @@ import ProgressIndicator from '../common/ProgressIndicator';
 import SupportHint from '../common/SupportHint';
 import { collectFailedTestLogs } from '../../utils/testStatus';
 
-const SN_STAGES = ['device', 'sims', 'logfiles', 'cases', 'ragflow', 'llm'] as const;
+const SN_STAGES = [
+  'device',
+  'sims',
+  'log_download',
+  'log_split',
+  'log_extract',
+  'log_merge',
+  'cases',
+  'ragflow',
+  'llm',
+] as const;
 const SN_STAGE_LABELS: Record<string, string> = {
   device: '查询设备信息',
   sims: 'SIMS 实时查询测试数据',
-  logfiles: '下载失败项原文日志',
+  log_download: '下载失败项原文日志',
+  log_split: '自适应拆分错误日志',
+  log_extract: '分块调用 AI 提取错误',
+  log_merge: '聚合全部错误日志',
   cases: '匹配历史案例',
   ragflow: '检索知识库文档',
   llm: '大模型深度诊断推理',
@@ -137,7 +150,7 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
     setError('');
     setPersistWarning('');
     setResult(null);
-    setProgress({ stage: 'llm', detail: '正在调用大模型深度诊断...' });
+    setProgress({ stage: 'device', detail: '正在查询设备信息...' });
     setStreamingToken('');
     setChatMessages([]);
     setHistoryId(null);
@@ -146,7 +159,14 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
     const controller = new AbortController();
     abortRef.current = controller;
 
-    diagnosisApi.diagnoseBySNAnalyze(snVal, factory).then((res) => {
+    diagnosisApi.diagnoseBySNAnalyze(
+      snVal,
+      factory,
+      (stage, detail) => {
+        if (reqId === requestIdRef.current) setProgress({ stage, detail });
+      },
+      controller.signal,
+    ).then((res) => {
       if (reqId !== requestIdRef.current) return;
       if (toastRef.current) {
         dismiss(toastRef.current);

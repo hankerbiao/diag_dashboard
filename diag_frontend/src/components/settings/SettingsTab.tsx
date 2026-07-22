@@ -1,7 +1,8 @@
 import { useRef, useState, useCallback } from 'react';
-import { CheckCircle2, AlertCircle, BookOpen } from 'lucide-react';
+import { CheckCircle2, AlertCircle, BookOpen, Save, Settings } from 'lucide-react';
 import ApiConfig from './ApiConfig';
 import type { ApiConfigHandle } from './ApiConfig';
+import LogExtractionPrompts from './LogExtractionPrompts';
 import GuideModal from '../guide/GuideModal';
 import SupportHint from '../common/SupportHint';
 
@@ -15,6 +16,8 @@ export default function SettingsTab() {
     setFeedback({ type, message });
     setTimeout(() => setFeedback(null), 3000);
   }, []);
+  const showSuccess = useCallback((message: string) => showFeedback('success', message), [showFeedback]);
+  const showError = useCallback((message: string) => showFeedback('error', message), [showFeedback]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -34,44 +37,92 @@ export default function SettingsTab() {
 
   return (
     <div
-      className="flex-1 overflow-y-auto p-6 lg:p-10 flex justify-center custom-scrollbar"
+      className="flex-1 overflow-y-auto custom-scrollbar"
       style={{ backgroundColor: 'var(--color-bg-primary)' }}
     >
-      <div className="w-full max-w-4xl space-y-8 pb-12">
-        <ApiConfig ref={apiConfigRef} />
-
-        <section
-          className="rounded-xl border p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
-          style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
+      <div className="mx-auto w-full max-w-6xl px-5 py-6 lg:px-8 lg:py-8">
+        <div
+          className="sticky top-0 z-10 -mx-5 mb-6 border-b px-5 py-4 backdrop-blur lg:-mx-8 lg:px-8"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--color-bg-primary) 88%, transparent)',
+            borderColor: 'var(--color-border)',
+          }}
         >
-          <div className="space-y-2 min-w-0">
-            <div className="flex items-center gap-2">
-              <BookOpen className="w-5 h-5 shrink-0" style={{ color: 'var(--color-accent)' }} />
-              <h2 className="text-[15px] font-bold" style={{ color: 'var(--color-text-primary)' }}>
-                使用文档
-              </h2>
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Settings className="h-5 w-5 shrink-0" style={{ color: 'var(--color-accent)' }} />
+                <h1 className="text-lg font-bold" style={{ color: 'var(--color-text-primary)' }}>
+                  系统设置
+                </h1>
+              </div>
+              <p className="mt-1 text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+                管理 AI 模型、日志提取 Prompt 与操作文档。
+              </p>
             </div>
-            <p className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
-              面向产线操作人员的快速指南，含登录、诊断、异常看板与 FAQ。
-            </p>
-            <SupportHint compact />
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg px-4 text-sm font-bold text-white shadow-sm transition active:scale-[0.98] disabled:opacity-60"
+              style={{
+                backgroundColor: 'var(--color-accent)',
+                boxShadow: '0 4px 10px -4px var(--color-shadow)',
+              }}
+            >
+              <Save className="h-4 w-4" />
+              {saving ? '保存中...' : '保存 AI 配置'}
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => setGuideOpen(true)}
-            className="shrink-0 px-5 py-2.5 rounded-lg text-[13px] font-bold text-white shadow-sm flex items-center gap-2 transition-all active:scale-[0.98]"
-            style={{ backgroundColor: 'var(--color-accent)', boxShadow: '0 2px 8px -2px var(--color-shadow)' }}
-          >
-            <BookOpen className="w-4 h-4" />
-            查看使用文档
-          </button>
-        </section>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
+          <div className="min-w-0 space-y-6">
+            <ApiConfig
+              ref={apiConfigRef}
+              onSuccessMessage={showSuccess}
+              onErrorMessage={showError}
+            />
+
+            <LogExtractionPrompts
+              onSuccessMessage={showSuccess}
+              onErrorMessage={showError}
+            />
+          </div>
+
+          <aside className="space-y-4 lg:sticky lg:top-28 lg:self-start">
+            <section
+              className="rounded-lg border p-5"
+              style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
+            >
+              <div className="flex items-center gap-2">
+                <BookOpen className="h-4 w-4 shrink-0" style={{ color: 'var(--color-accent)' }} />
+                <h2 className="text-sm font-bold" style={{ color: 'var(--color-text-primary)' }}>
+                  使用文档
+                </h2>
+              </div>
+              <p className="mt-2 text-xs leading-5" style={{ color: 'var(--color-text-muted)' }}>
+                登录、诊断、异常看板与常见问题的快速指南。
+              </p>
+              <button
+                type="button"
+                onClick={() => setGuideOpen(true)}
+                className="mt-4 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg text-sm font-bold text-white transition active:scale-[0.98]"
+                style={{ backgroundColor: 'var(--color-accent)' }}
+              >
+                <BookOpen className="h-4 w-4" />
+                打开文档
+              </button>
+            </section>
+
+            <SupportHint compact />
+          </aside>
+        </div>
 
         <GuideModal open={guideOpen} onClose={() => setGuideOpen(false)} />
 
         {feedback && (
           <div
-            className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm font-medium animate-pulse"
+            className="fixed bottom-6 right-6 z-20 flex max-w-sm items-center gap-2 rounded-lg px-4 py-3 text-sm font-medium shadow-lg"
             style={{
               backgroundColor: feedback.type === 'success' ? 'var(--color-success-bg, #ecfdf5)' : 'var(--color-error-bg, #fef2f2)',
               color: feedback.type === 'success' ? 'var(--color-success, #059669)' : 'var(--color-error, #dc2626)',
@@ -82,33 +133,6 @@ export default function SettingsTab() {
             {feedback.message}
           </div>
         )}
-
-        <div
-          className="flex justify-end gap-4 pt-6"
-          style={{ borderTop: '1px solid var(--color-border)' }}
-        >
-          <button
-            className="px-6 py-2.5 font-bold text-[13px] rounded-lg transition-colors shadow-sm"
-            style={{
-              backgroundColor: 'var(--color-bg-secondary)',
-              border: '1px solid var(--color-border)',
-              color: 'var(--color-text-secondary)',
-            }}
-          >
-            放弃更改
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="px-6 py-2.5 text-white font-bold text-[13px] rounded-lg transition-colors shadow-sm flex items-center gap-2 active:scale-95 disabled:opacity-60"
-            style={{
-              backgroundColor: 'var(--color-accent)',
-              boxShadow: '0 4px 6px -1px var(--color-shadow)',
-            }}
-          >
-            <CheckCircle2 className="w-4 h-4" /> {saving ? '保存中...' : '应用全局配置'}
-          </button>
-        </div>
       </div>
     </div>
   );

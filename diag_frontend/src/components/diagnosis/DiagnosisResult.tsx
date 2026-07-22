@@ -427,6 +427,26 @@ export default function DiagnosisResult({ result, factory, historyId }: Diagnosi
                   className="rounded-xl border overflow-hidden shadow-sm divide-y"
                   style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}
                 >
+                  {result.merged_error_log && (
+                    <div className="flex items-center justify-between px-4 py-3 text-[12px]">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold" style={{ color: 'var(--color-text-primary)' }}>
+                          聚合错误日志
+                        </div>
+                        <div className="mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
+                          已整合 {result.failed_log_files.length} 份日志，内容与本次诊断输入一致
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => downloadTextAsFile(result.merged_error_log!, `${result.sn}_aggregated_errors.txt`)}
+                        className="shrink-0 text-[11px] px-3 py-1.5 rounded-lg border font-bold transition-colors flex items-center gap-1.5 hover:opacity-80"
+                        style={{ borderColor: 'var(--color-border)', color: '#059669', backgroundColor: 'rgba(16,185,129,0.08)' }}
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        下载聚合结果
+                      </button>
+                    </div>
+                  )}
                   {result.failed_log_files.map((lf, idx) => (
                     <LogFileDownloadRow key={lf.log_path || idx} logFile={lf} />
                   ))}

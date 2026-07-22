@@ -375,8 +375,8 @@ LOG_EXTRACTION_SYSTEM_PROMPT = """你是一个日志解析专家。你的任务�
 4. 如果日志中包含堆栈信息，保留完整堆栈
 5. 输出时保留原始日志的行号和内容，不要改写"""
 
-LOG_EXTRACTION_USER_PROMPT_TPL = """以下是设备测试日志的原始内容（共 {total_lines} 行，{total_chars} 字符）。
-编码级预扫描已在 {total_lines} 行中定位到 {matched_lines} 个候选错误行，分布在 {paragraphs} 个段落中。
+LOG_EXTRACTION_USER_PROMPT_TPL = """以下是设备测试日志的第 {segment_index}/{segment_count} 个处理块，
+对应原始日志第 {segment_start_line}-{segment_end_line} 行（本块共 {total_lines} 行，{total_chars} 字符）。
 
 请分析以下日志，按模板输出 JSON 格式的结果。
 
@@ -400,7 +400,10 @@ LOG_EXTRACTION_USER_PROMPT_TPL = """以下是设备测试日志的原始内容�
   "summary": "对整个日志的错误情况做 50-100 字摘要，包括：共有几个关键错误、最严重的错误是什么、整体趋势",
   "has_critical_errors": true,
   "suggested_root_cause": "根据已有信息初步判断可能的根因"
-}}"""
+}}
+```
+
+line_number 必须填写该错误在原始完整日志中的全局行号，而不是处理块内的相对行号。"""
 
 
 __all__ = [

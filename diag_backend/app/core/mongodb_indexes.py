@@ -82,6 +82,9 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
     # ---- global_app_config ----
     await db["global_app_config"].create_index("_id", name="idx_global_config_id")
 
+    # ---- log_extraction_prompts (按机型配置的 AI 错误日志提取 prompt) ----
+    await db["log_extraction_prompts"].create_index("_id", name="idx_log_extraction_prompts_id")
+
     # ---- diagnosis_feedback ----
     await db["diagnosis_feedback"].create_index(
         [("history_id", 1)], name="idx_diagnosis_feedback_history"
@@ -120,6 +123,9 @@ async def seed_default_data(db: AsyncIOMotorDatabase):
     # Seed global AI config from environment variables (first deploy only)
     await seed_global_ai_config(db)
 
+    # Seed 默认错误日志提取 prompt（首次部署，可被前端覆盖）
+    await seed_log_extraction_default(db)
+
     logger.info("Default seed data ensured")
 
 
@@ -133,6 +139,27 @@ async def seed_global_ai_config(db: AsyncIOMotorDatabase):
             "base_url": "",
             "model": "",
             "provider": "",
+            "updated_by": "system",
+            "updated_at": utc_now_iso(),
+        }},
+        upsert=True
+    )
+
+
+async def seed_log_extraction_default(db: AsyncIOMotorDatabase):
+    """播种默认错误日志提取 prompt（首次部署时插入，供前端编辑与机型回退）"""
+    from ..services.log_extractor import (
+        LOG_EXTRACTION_SYSTEM_PROMPT,
+        LOG_EXTRACTION_USER_PROMPT_TPL,
+    )
+    await db["log_extraction_prompts"].update_one(
+        {"_id": "default"},
+        {"$setOnInsert": {
+            "_id": "default",
+            "model": "default",
+            "is_default": True,
+            "system_prompt": LOG_EXTRACTION_SYSTEM_PROMPT,
+            "user_template": LOG_EXTRACTION_USER_PROMPT_TPL,
             "updated_by": "system",
             "updated_at": utc_now_iso(),
         }},

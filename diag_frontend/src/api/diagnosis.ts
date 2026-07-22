@@ -1,4 +1,4 @@
-import { fetchApi, API_BASE_URL } from './fetch';
+import { fetchApi, API_BASE_URL, type ApiResponse } from './fetch';
 import { getAccessToken } from './auth';
 import type {
   DiagnosisResult, DiagnosisCache, ErrorAnalysis, SnHistoryItem, SnHistoryDetail
@@ -15,11 +15,62 @@ export const diagnosisApi = {
     const params = logBaseUrl ? `?log_base_url=${encodeURIComponent(logBaseUrl)}` : '';
     return fetchApi<DiagnosisCache>(`/api/diagnosis/error-log/${encodeURIComponent(errorLogId)}/analyze${params}`, { method: 'POST' });
   },
-  async diagnoseBySNAnalyze(sn: string, factory: string) {
-    return fetchApi<DiagnosisResult>('/api/diagnosis/sn/analyze', {
+  async diagnoseBySNAnalyze(
+    sn: string,
+    factory: string,
+    onProgress?: (stage: string, detail: string) => void,
+    signal?: AbortSignal,
+  ): Promise<ApiResponse<DiagnosisResult>> {
+    const token = getAccessToken();
+    const response = await fetch(`${API_BASE_URL}/api/diagnosis/sn/analyze`, {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify({ sn, factory }),
+      signal,
     });
+    if (!response.ok || !response.body) {
+      try {
+        return await response.json() as ApiResponse<DiagnosisResult>;
+      } catch {
+        return { success: false, error: `诊断请求失败（HTTP ${response.status}）` };
+      }
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const frames = buffer.split(/\r?\n\r?\n/);
+      buffer = frames.pop() ?? '';
+      for (const frame of frames) {
+        const data = frame.split(/\r?\n/)
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trim())
+          .join('\n');
+        if (!data) continue;
+        const event = JSON.parse(data) as {
+          type: 'progress' | 'result' | 'error';
+          stage?: string;
+          detail?: string;
+          data?: DiagnosisResult;
+          error?: string;
+        };
+        if (event.type === 'progress') {
+          onProgress?.(event.stage ?? '', event.detail ?? '');
+        } else if (event.type === 'result' && event.data) {
+          return { success: true, data: event.data };
+        } else if (event.type === 'error') {
+          return { success: false, error: event.error || '诊断失败' };
+        }
+      }
+      if (done) break;
+    }
+    return { success: false, error: '诊断连接已结束，但未收到分析结果' };
   },
   async analyzeErrorLogKB(
     errorLogId: string,

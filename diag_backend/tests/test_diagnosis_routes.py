@@ -1,6 +1,7 @@
 """
 诊断路由 API 测试
 """
+import json
 from typing import List, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -168,6 +169,48 @@ class TestDiagnosisSN:
         )
 
         assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_diagnose_sn_streams_progress_and_merged_log(
+        self, async_client, auth_headers: dict, sample_diagnosis_result: dict
+    ):
+        async def fake_gather(_sn, _factory, on_progress=None):
+            await on_progress("log_split", "日志共 501 行，已拆分为 2 块")
+            await on_progress("log_extract", "已完成 2/2 个日志块")
+            return (
+                {"id": "device-1", "sn": "SN123", "model": "X1"},
+                [],
+                [],
+                [],
+                [],
+                "## 聚合错误日志\nERROR disk offline",
+                [],
+                [],
+                "# SN SN123 聚合错误日志\nERROR disk offline\n",
+            )
+
+        with patch(
+            "app.routers.diagnosis._gather_sn_data", new=AsyncMock(side_effect=fake_gather)
+        ), patch("app.routers.diagnosis.llm_service") as mock_llm:
+            mock_llm.diagnose_sn = AsyncMock(return_value=sample_diagnosis_result)
+            response = await async_client.post(
+                "/api/diagnosis/sn/analyze",
+                headers=auth_headers,
+                json={"sn": "SN123", "factory": "Factory-A"},
+            )
+
+        assert response.status_code == 200
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: ")
+        ]
+        assert [event["stage"] for event in events if event["type"] == "progress"][:2] == [
+            "log_split",
+            "log_extract",
+        ]
+        result = next(event["data"] for event in events if event["type"] == "result")
+        assert "ERROR disk offline" in result["merged_error_log"]
 
 
 class TestDiagnosisErrorLog:

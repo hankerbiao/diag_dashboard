@@ -1,6 +1,7 @@
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Literal, Optional
 import json
 import re
+from string import Formatter
 
 import httpx
 from openai import AsyncOpenAI, BadRequestError
@@ -79,8 +80,8 @@ class LLMService:
         system_prompt = "硬件诊断工程师"
         system_tokens = self._estimate_tokens(system_prompt)
         # 模型上下文长度，加上 10000 的安全余量
-        context_len = self._config.get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN)
-        max_output = self._config.get("max_tokens", 28000) or 28000
+        context_len = self._config["answer"].get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN)
+        max_output = self._config["answer"].get("max_tokens", 28000) or 28000
         # 安全限制：max_output 不超过上下文窗口的 70%，且至少留 4096 给 prompt
         safe_max_output = min(max_output, int(context_len * 0.7), context_len - 4096)
         safe_max_output = max(safe_max_output, 1024)
@@ -174,87 +175,157 @@ class LLMService:
         return final_prompt
 
     def __init__(self):
-        self.openai_client: Optional[AsyncOpenAI] = None
-        self._config: dict = {}
+        self._answer_client: Optional[AsyncOpenAI] = None
+        self._extraction_client: Optional[AsyncOpenAI] = None
+        self._config: dict = {"answer": {}, "extraction": {}}
         self._loaded = False
+
+    # openai_client 向后兼容别名（指向回答模型客户端）
+    @property
+    def openai_client(self) -> Optional[AsyncOpenAI]:
+        return self._answer_client
+
+    @openai_client.setter
+    def openai_client(self, value: Optional[AsyncOpenAI]) -> None:
+        self._answer_client = value
 
     # ------------------------------------------------------------------
     # 配置加载
     # ------------------------------------------------------------------
 
     async def _load_config_from_db(self) -> dict:
-        """从 MongoDB 加载 AI 配置"""
+        """从 MongoDB 加载 AI 配置（回答模型 + 提取模型双配置）
+
+        提取模型字段留空时回退复用回答模型配置，以兼容单模型部署。
+        """
         from ..core.mongodb import get_collection
         col = get_collection("global_app_config")
         config = await col.find_one({"_id": "ai_config"})
-        if config and config.get("api_key"):
-            return {
-                "api_key": config.get("api_key", ""),
-                "base_url": config.get("base_url", ""),
-                "model": config.get("model", ""),
-                "temperature": config.get("temperature", 0.0),
-                "max_tokens": config.get("max_tokens", 0),
-                "chat_template_kwargs": config.get("chat_template_kwargs", {"enable_thinking": False}),
-                "timeout": config.get("timeout", 0),
-            }
-        raise RuntimeError("AI 配置未初始化，请先在设置页面配置 LLM 参数")
+        if not config:
+            raise RuntimeError("AI 配置未初始化，请先在设置页面配置 LLM 参数")
+
+        answer = {
+            "api_key": config.get("api_key", ""),
+            "base_url": config.get("base_url", ""),
+            "model": config.get("model", ""),
+            "temperature": config.get("temperature", 0.0),
+            "max_tokens": config.get("max_tokens", 0),
+            "chat_template_kwargs": config.get("chat_template_kwargs", {"enable_thinking": False}),
+            "timeout": config.get("timeout", 0),
+            "model_context_len": config.get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN),
+        }
+        extraction = {
+            "api_key": config.get("extraction_api_key") or answer["api_key"],
+            "base_url": config.get("extraction_base_url") or answer["base_url"],
+            "model": config.get("extraction_model") or answer["model"],
+            "temperature": config.get("extraction_temperature", 0.0),
+            "max_tokens": config.get("extraction_max_tokens") or answer["max_tokens"],
+            "chat_template_kwargs": config.get("extraction_chat_template_kwargs") or answer["chat_template_kwargs"],
+            "timeout": config.get("extraction_timeout") or answer["timeout"],
+            "model_context_len": config.get("extraction_model_context_len") or answer["model_context_len"],
+        }
+
+        if not answer["api_key"] and not extraction["api_key"]:
+            raise RuntimeError("AI 配置未初始化，请先在设置页面配置 LLM 参数")
+        return {"answer": answer, "extraction": extraction}
 
     async def _ensure_configured(self):
         """懒加载配置（仅在无预设客户端时执行一次）"""
-        if not self._loaded and self.openai_client is None:
+        if not self._loaded and self._answer_client is None:
             self._config = await self._load_config_from_db()
-            self._rebuild_client()
+            self._rebuild_clients()
             self._loaded = True
 
-    def _rebuild_client(self):
-        """根据当前 _config 重建 AsyncOpenAI 客户端"""
-        key = self._config.get("api_key", "")
-        url = self._config.get("base_url", "")
-        timeout = self._config.get("timeout", 300) or 300
+    def _build_client(self, cfg: dict) -> AsyncOpenAI:
+        """根据单个配置字典构建 AsyncOpenAI 客户端"""
+        key = cfg.get("api_key", "")
+        url = cfg.get("base_url", "")
+        timeout = cfg.get("timeout", 300) or 300
         kwargs = {"api_key": key}
         if url:
             kwargs["base_url"] = url
         kwargs["timeout"] = httpx.Timeout(timeout, connect=10.0, read=timeout)
-        self.openai_client = AsyncOpenAI(**kwargs)
+        return AsyncOpenAI(**kwargs)
+
+    def _rebuild_clients(self):
+        """根据当前 _config 重建回答/提取两个 AsyncOpenAI 客户端"""
+        self._answer_client = self._build_client(self._config["answer"])
+        self._extraction_client = self._build_client(self._config["extraction"])
 
     async def reload_config(self):
         """从数据库重新加载配置（热加载）"""
         self._config = await self._load_config_from_db()
-        self._rebuild_client()
+        self._rebuild_clients()
         self._loaded = True
 
     # ------------------------------------------------------------------
     # 公共配置访问
     # ------------------------------------------------------------------
 
-    def get_config_value(self, key: str, default=None):
-        """安全地获取配置项"""
-        return self._config.get(key, default)
+    def get_config_value(self, key: str, default=None, client: Literal["answer", "extraction"] = "answer"):
+        """安全地获取配置项（client 指定回答/提取模型配置）"""
+        return self._config.get(client, {}).get(key, default)
 
     # ------------------------------------------------------------------
     # LLM 调用
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # 模拟响应（未配置模型时优雅降级）
+    # ------------------------------------------------------------------
+
+    def _mock_response(self, messages: list[dict], client: Literal["answer", "extraction"] = "answer") -> str:
+        """未配置 LLM 时返回结构化占位响应，保证接口不崩溃。
+
+        - answer 客户端：根据消息内容返回诊断 / 分析两类 JSON 占位。
+        - extraction 客户端：返回与 LOG_EXTRACTION_FALLBACK 一致的结构。
+        """
+        if client == "extraction":
+            return json.dumps(self.LOG_EXTRACTION_FALLBACK, ensure_ascii=False)
+
+        text = " ".join(str(m.get("content", "")) for m in messages)
+        if "分析" in text or "错误" in text or "root_cause" in text or "分析" in text:
+            return json.dumps({
+                "root_cause": "（模拟）未配置模型，需进一步定位",
+                "analysis": "当前未配置 LLM，返回模拟分析。",
+                "repair_suggestions": ["请在设置页配置诊断回答模型（强推理）"],
+            }, ensure_ascii=False)
+        return json.dumps({
+            "category": "未知",
+            "summary": "（模拟）未配置模型，返回占位诊断。",
+            "confidence": 0.5,
+            "root_cause_detail": "未配置 LLM，无法进行深度诊断。",
+            "affected_components": [],
+            "suggestions": ["请在设置页配置诊断回答模型（强推理）"],
+            "preventive_measures": [],
+        }, ensure_ascii=False)
+
     async def chat_completion(
         self, messages: list[dict], model: Optional[str] = None, temperature: Optional[float] = None,
+        client: Literal["answer", "extraction"] = "answer",
     ) -> str:
         await self._ensure_configured()
+        cfg = self._config[client]
+        client_obj = self._answer_client if client == "answer" else self._extraction_client
+        # 未配置模型（客户端为空或 key 缺失）：返回模拟响应，避免接口崩溃
+        if client_obj is None or not cfg.get("api_key"):
+            return self._mock_response(messages, client)
         extra_kwargs = {}
-        chat_template_kwargs = self._config.get("chat_template_kwargs")
+        chat_template_kwargs = cfg.get("chat_template_kwargs")
         if chat_template_kwargs:
             extra_kwargs["extra_body"] = chat_template_kwargs
 
         # 自动限制 max_tokens：不超过模型上下文窗口的 70%，且至少保留 4096 token 给 prompt
-        context_len = self._config.get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN)
-        max_output = self._config.get("max_tokens", 28000) or 28000
+        context_len = cfg.get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN)
+        max_output = cfg.get("max_tokens", 28000) or 28000
         safe_max_output = min(max_output, int(context_len * 0.7), context_len - 4096)
         safe_max_output = max(safe_max_output, 1024)  # 至少 1024
 
         try:
-            return (await self.openai_client.chat.completions.create(
-                model=model or self._config["model"],
+            return (await client_obj.chat.completions.create(
+                model=model or cfg["model"],
                 messages=messages,
-                temperature=temperature if temperature is not None else self._config["temperature"],
+                temperature=temperature if temperature is not None else cfg["temperature"],
                 max_tokens=safe_max_output,
                 **extra_kwargs,
             )).choices[0].message.content
@@ -265,24 +336,32 @@ class LLMService:
     async def chat_completion_stream(
         self, messages: list[dict], token_cb: Callable[[str], Awaitable[None]],
         model: Optional[str] = None, temperature: Optional[float] = None,
+        client: Literal["answer", "extraction"] = "answer",
     ) -> str:
         await self._ensure_configured()
+        cfg = self._config[client]
+        client_obj = self._answer_client if client == "answer" else self._extraction_client
+        # 未配置模型：直接返回模拟响应
+        if client_obj is None or not cfg.get("api_key"):
+            mock = self._mock_response(messages, client)
+            await token_cb(mock)
+            return mock
         extra_kwargs = {"stream": True}
-        chat_template_kwargs = self._config.get("chat_template_kwargs")
+        chat_template_kwargs = cfg.get("chat_template_kwargs")
         if chat_template_kwargs:
             extra_kwargs["extra_body"] = chat_template_kwargs
 
         # 自动限制 max_tokens：不超过模型上下文窗口的 70%，且至少保留 4096 token 给 prompt
-        context_len = self._config.get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN)
-        max_output = self._config.get("max_tokens", 28000) or 28000
+        context_len = cfg.get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN)
+        max_output = cfg.get("max_tokens", 28000) or 28000
         safe_max_output = min(max_output, int(context_len * 0.7), context_len - 4096)
         safe_max_output = max(safe_max_output, 1024)
 
         try:
-            stream = await self.openai_client.chat.completions.create(
-                model=model or self._config["model"],
+            stream = await client_obj.chat.completions.create(
+                model=model or cfg["model"],
                 messages=messages,
-                temperature=temperature if temperature is not None else self._config["temperature"],
+                temperature=temperature if temperature is not None else cfg["temperature"],
                 max_tokens=safe_max_output,
                 **extra_kwargs,
             )
@@ -422,49 +501,72 @@ class LLMService:
         self,
         raw_log_text: str,
         encoding_stats: Optional[dict] = None,
+        system_prompt: Optional[str] = None,
+        user_template: Optional[str] = None,
+        client: Literal["answer", "extraction"] = "extraction",
+        raise_on_error: bool = False,
     ) -> dict:
         """
         使用 LLM 从原始日志中提取关键错误信息（AI 级精炼）。
 
-        这是两级提取策略的第二级：
-        - 第一级：编码级提取（ContextExtractor），快速定位候选错误行
-        - 第二级（本方法）：LLM 精炼，去噪、归类、输出结构化结果
+        支持外部覆盖 prompt（按机型配置的提取 prompt 注入），并通过 client
+        参数选择「提取模型（快速）」或「回答模型（强推理）」。
 
         Args:
-            raw_log_text: 原始日志文本（编码提取后的段落，非完整日志）
+            raw_log_text: 原始日志文本（某一段落）
             encoding_stats: 编码提取阶段的统计信息（可选）
+            system_prompt: 覆盖系统提示词；为空则用默认 LOG_EXTRACTION_SYSTEM_PROMPT
+            user_template: 覆盖用户提示词模板（接受 {log_text}/{total_lines}/... 占位符）
+            client: 使用的模型客户端，"extraction"=快速提取模型，"answer"=推理模型
 
         Returns:
             dict: {"errors": [...], "summary": str, "has_critical_errors": bool,
                    "suggested_root_cause": str}
         """
-        stats_info = ""
-        if encoding_stats:
-            stats_info = (
-                f"编码级预扫描信息：\n"
-                f"- 总行数: {encoding_stats.get('total_lines', '?')}\n"
-                f"- 匹配错误行: {encoding_stats.get('matched_lines', '?')}\n"
-                f"- 段落数: {encoding_stats.get('paragraphs', '?')}\n"
-            )
-
-        user_prompt = LOG_EXTRACTION_USER_PROMPT_TPL.format(
-            total_lines=encoding_stats.get("total_lines", "?"),
-            total_chars=encoding_stats.get("total_chars", "?"),
-            matched_lines=encoding_stats.get("matched_lines", "?"),
-            paragraphs=encoding_stats.get("paragraphs", "?"),
+        stats = encoding_stats or {}
+        template = user_template or LOG_EXTRACTION_USER_PROMPT_TPL
+        user_prompt = self._safe_format(
+            template,
+            total_lines=stats.get("total_lines", "?"),
+            total_chars=stats.get("total_chars", "?"),
+            matched_lines=stats.get("matched_lines", "?"),
+            paragraphs=stats.get("paragraphs", "?"),
+            segment_start_line=stats.get("segment_start_line", 1),
+            segment_end_line=stats.get("segment_end_line", stats.get("total_lines", "?")),
+            segment_index=stats.get("segment_index", 0) + 1,
+            segment_count=stats.get("segment_count", 1),
             log_text=raw_log_text,
         )
 
         try:
-            response = await self.chat_completion([
-                {"role": "system", "content": LOG_EXTRACTION_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ])
-            return self._parse_json_response(response, self.LOG_EXTRACTION_FALLBACK)
+            response = await self.chat_completion(
+                [
+                    {"role": "system", "content": system_prompt or LOG_EXTRACTION_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                client=client,
+            )
+            parsed = json.loads(self._extract_json(response))
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("errors", []), list):
+                raise ValueError("AI 日志提取结果结构无效")
+            return parsed
         except Exception as e:
             logger = __import__("logging").getLogger(__name__)
             logger.warning("AI 日志提取失败 error=%s", e)
+            if raise_on_error:
+                raise RuntimeError(f"AI 日志提取失败: {e}") from e
             return dict(self.LOG_EXTRACTION_FALLBACK, summary=f"AI 日志提取异常: {e}")
+
+    @staticmethod
+    def _safe_format(template: str, **fields) -> str:
+        """容忍式字符串格式化：仅替换模板中引用的字段，缺失字段填充空串。
+
+        避免自定义 user_template 缺少某些占位符（如 {total_lines}）时抛 KeyError。
+        """
+        formatter = Formatter()
+        used = {name for _, name, _, _ in formatter.parse(template) if name}
+        merged = {k: fields.get(k, "") for k in used}
+        return formatter.format(template, **merged)
 
 
 llm_service = LLMService()

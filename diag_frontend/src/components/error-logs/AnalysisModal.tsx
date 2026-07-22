@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Bot, Sparkles, AlertTriangle, Wrench, Terminal, RefreshCw, X, BookOpen, FileText } from 'lucide-react';
+import { Bot, Sparkles, AlertTriangle, Wrench, Terminal, RefreshCw, X, BookOpen, FileText, Download } from 'lucide-react';
 import type { ErrorLogRow } from '../../types';
 import type { DiagnosisCache } from '../../api/fastapi';
 import SupportHint from '../common/SupportHint';
@@ -28,6 +28,19 @@ const S = {
   muted: { color: 'var(--color-text-muted)' },
   accent: { color: 'var(--color-accent)' },
 };
+
+function downloadExtractedLog(content: string, sn: string, testItem: string) {
+  const safeName = `${sn}_${testItem}`.replace(/[/\\:*?"<>|]/g, '_');
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `${safeName}_aggregated_errors.txt`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
 
 function StageItem({ stage, progress }: { stage: Stage; progress?: { stage: string; detail: string } | null }) {
   const idx = STAGES.indexOf(stage);
@@ -88,7 +101,7 @@ export default function AnalysisModal({
       <div className="w-full max-w-4xl max-h-[85vh] shadow-2xl rounded-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-300 border"
         style={S.card}>
         {/* Header */}
-        <div className="h-[65px] px-6 border-b flex items-center justify-between shrink-0"
+        <div className="min-h-[65px] px-6 py-3 border-b flex items-center justify-between gap-3 flex-wrap shrink-0"
           style={{ backgroundColor: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }}>
           <h3 className="font-bold flex items-center gap-2.5 text-base" style={{ color: 'var(--color-text-primary)' }}>
             <span className="w-8 h-8 rounded-lg flex items-center justify-center shadow-sm"
@@ -97,14 +110,23 @@ export default function AnalysisModal({
             </span>
             大模型缺陷诊断与修复研判中心
           </h3>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center justify-end gap-2 flex-wrap">
             {result && !isAnalyzing && (
               <>
                 <button onClick={() => setShowRawLog(true)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-bold transition-colors active:scale-95 border"
                   style={{ backgroundColor: '#1a1b26', color: '#f87171', borderColor: '#334155' }}>
-                  <FileText className="w-3.5 h-3.5" /> 查看原始日志
+                  <FileText className="w-3.5 h-3.5" /> 查看提取日志
                 </button>
+                {result.log_content && (
+                  <button
+                    onClick={() => downloadExtractedLog(result.log_content, selectedLog.sn, selectedLog.testItem)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-bold transition-colors active:scale-95 border"
+                    style={{ backgroundColor: 'rgba(16,185,129,0.08)', color: '#059669', borderColor: 'rgba(16,185,129,0.25)' }}
+                  >
+                    <Download className="w-3.5 h-3.5" /> 下载聚合日志
+                  </button>
+                )}
                 <button onClick={() => onReAnalyze(selectedLog.id)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-bold transition-colors active:scale-95 border"
                   style={{ backgroundColor: 'var(--color-accent-light)', color: 'var(--color-accent)', borderColor: 'var(--color-border)' }}>
@@ -298,7 +320,7 @@ export default function AnalysisModal({
             <div className="h-12 px-5 border-b flex items-center justify-between shrink-0" style={{ borderColor: '#334155' }}>
               <div className="flex items-center gap-2 text-[13px] font-bold" style={{ color: '#f87171' }}>
                 <Terminal className="w-4 h-4" />
-                原始日志{result.log_content ? `（尾部 ${result.log_content.split('\n').length} 行）` : ''}
+                AI 提取后的聚合错误日志{result.log_content ? `（${result.log_content.split('\n').length} 行）` : ''}
               </div>
               <button onClick={() => setShowRawLog(false)} className="p-1.5 rounded-lg transition-colors hover:bg-slate-700/50"
                 style={{ color: '#64748b' }}><X className="w-4 h-4" /></button>

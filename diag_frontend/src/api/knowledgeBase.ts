@@ -1,6 +1,6 @@
 import { fetchApi, API_BASE_URL } from './fetch';
 import { getAccessToken } from './auth';
-import type { KnowledgeDoc, GlobalAiConfig } from './types';
+import type { KnowledgeDoc, GlobalAiConfig, MachineModelsResponse, LogExtractionPromptsResponse, LogExtractionPrompt } from './types';
 
 export interface SearchReference { chunk_id: string; content: string; similarity: number; doc_name: string; }
 export interface KnowledgeSearchResult { references: SearchReference[]; }
@@ -40,7 +40,22 @@ export const knowledgeBaseApi = {
 
 export const settingsApi = {
   async getAiConfig() { return fetchApi<GlobalAiConfig>('/api/settings/ai-config'); },
-  async updateAiConfig(config: { api_key?: string; base_url?: string; model?: string; temperature?: number; max_tokens?: number; chat_template_kwargs?: { enable_thinking: boolean }; timeout?: number }) {
+  async updateAiConfig(config: {
+    api_key?: string; base_url?: string; model?: string; temperature?: number; max_tokens?: number;
+    chat_template_kwargs?: { enable_thinking: boolean }; timeout?: number;
+    extraction_api_key?: string; extraction_base_url?: string; extraction_model?: string;
+    extraction_max_tokens?: number; extraction_timeout?: number;
+  }) {
     return fetchApi<void>('/api/settings/ai-config', { method: 'PUT', body: JSON.stringify(config) });
   },
+  async getMachineModels() { return fetchApi<MachineModelsResponse>('/api/settings/machine-models'); },
+  async getExtractionPrompts() { return fetchApi<LogExtractionPromptsResponse>('/api/settings/log-extraction/prompts'); },
+  async upsertExtractionPrompt(body: { model: string; system_prompt: string; user_template: string }) {
+    return fetchApi<void>('/api/settings/log-extraction/prompts', { method: 'PUT', body: JSON.stringify(body) });
+  },
+  async deleteExtractionPrompt(model: string) {
+    return fetchApi<void>(`/api/settings/log-extraction/prompts/${encodeURIComponent(model)}`, { method: 'DELETE' });
+  },
 };
+
+export type { LogExtractionPrompt };

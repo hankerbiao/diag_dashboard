@@ -1,5 +1,5 @@
-import { useState, useEffect, useImperativeHandle, forwardRef } from 'react';
-import { Sliders, Key, Loader2, CheckCircle2, AlertCircle, Cpu, Brain, Clock } from 'lucide-react';
+import { useState, useEffect, useImperativeHandle, forwardRef, type ReactNode } from 'react';
+import { Sliders, Key, Loader2, Brain, Clock, Zap, Thermometer, Hash, Link2 } from 'lucide-react';
 import { settingsApi } from '../../api/fastapi';
 
 export interface ApiConfigHandle {
@@ -11,6 +11,111 @@ interface ApiConfigProps {
   onSuccessMessage?: (msg: string) => void;
 }
 
+interface TextFieldProps {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: 'text' | 'password';
+  icon?: ReactNode;
+}
+
+interface NumberFieldProps {
+  label: string;
+  value: number | null;
+  onChange: (value: number | null) => void;
+  placeholder?: string;
+  min?: number;
+  icon?: ReactNode;
+}
+
+const inputStyle = {
+  borderColor: 'var(--color-border)',
+  backgroundColor: 'var(--color-bg-primary)',
+  color: 'var(--color-text-primary)',
+};
+
+const labelStyle = { color: 'var(--color-text-primary)' };
+const mutedStyle = { color: 'var(--color-text-muted)' };
+
+function TextField({ label, value, onChange, placeholder, type = 'text', icon }: TextFieldProps) {
+  return (
+    <label className="block space-y-2">
+      <span className="text-xs font-bold" style={labelStyle}>
+        {label}
+      </span>
+      <span className="relative block">
+        {icon && (
+          <span className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--color-text-secondary)' }}>
+            {icon}
+          </span>
+        )}
+        <input
+          type={type}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className={`h-10 w-full rounded-lg border px-3 text-sm font-mono outline-none transition focus:border-blue-400 ${
+            icon ? 'pl-9' : ''
+          }`}
+          style={inputStyle}
+          placeholder={placeholder}
+        />
+      </span>
+    </label>
+  );
+}
+
+function NumberField({ label, value, onChange, placeholder, min = 1, icon }: NumberFieldProps) {
+  return (
+    <label className="block space-y-2">
+      <span className="flex items-center justify-between gap-3 text-xs font-bold" style={labelStyle}>
+        <span className="inline-flex items-center gap-1.5">
+          {icon}
+          {label}
+        </span>
+        <span className="rounded px-2 py-0.5 font-mono text-[11px]" style={{ backgroundColor: 'var(--color-accent-light)', color: 'var(--color-accent)' }}>
+          {value !== null ? value.toLocaleString() : '默认'}
+        </span>
+      </span>
+      <input
+        type="number"
+        value={value ?? ''}
+        onChange={(e) => onChange(e.target.value ? Math.max(min, parseInt(e.target.value) || 0) : null)}
+        className="h-10 w-full rounded-lg border px-3 text-sm font-mono outline-none transition focus:border-blue-400"
+        style={inputStyle}
+        min={min}
+        placeholder={placeholder}
+      />
+    </label>
+  );
+}
+
+function SectionTitle({ icon, title, description, badge }: { icon: ReactNode; title: string; description: string; badge?: string }) {
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span style={{ color: 'var(--color-accent)' }}>{icon}</span>
+          <h3 className="text-sm font-bold" style={labelStyle}>
+            {title}
+          </h3>
+        </div>
+        <p className="mt-1 text-xs leading-5" style={mutedStyle}>
+          {description}
+        </p>
+      </div>
+      {badge && (
+        <span
+          className="w-fit rounded-full border px-2.5 py-1 text-[11px] font-bold"
+          style={{ color: 'var(--color-accent)', borderColor: 'var(--color-accent)', backgroundColor: 'var(--color-accent-light)' }}
+        >
+          {badge}
+        </span>
+      )}
+    </div>
+  );
+}
+
 const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
   ({ onErrorMessage, onSuccessMessage }, ref) => {
     const [apiKey, setApiKey] = useState('');
@@ -20,10 +125,15 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
     const [maxTokens, setMaxTokens] = useState<number | null>(null);
     const [enableThinking, setEnableThinking] = useState(false);
     const [timeout, setTimeout_] = useState<number | null>(null);
+    const [extractionApiKey, setExtractionApiKey] = useState('');
+    const [extractionBaseUrl, setExtractionBaseUrl] = useState('');
+    const [extractionModel, setExtractionModel] = useState('');
+    const [extractionMaxTokens, setExtractionMaxTokens] = useState<number | null>(null);
+    const [extractionTimeout, setExtractionTimeout] = useState<number | null>(null);
+
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
-    // 挂载时从 API 加载当前配置
     useEffect(() => {
       settingsApi.getAiConfig().then((resp) => {
         if (resp.success && resp.data) {
@@ -34,13 +144,17 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
           setMaxTokens(resp.data.max_tokens);
           setEnableThinking(resp.data.chat_template_kwargs?.enable_thinking ?? false);
           setTimeout_(resp.data.timeout);
+          setExtractionApiKey(resp.data.extraction_api_key || '');
+          setExtractionBaseUrl(resp.data.extraction_base_url || '');
+          setExtractionModel(resp.data.extraction_model || '');
+          setExtractionMaxTokens(resp.data.extraction_max_tokens);
+          setExtractionTimeout(resp.data.extraction_timeout);
         }
       }).catch(() => {
-        // 保持默认值
+        onErrorMessage?.('AI 配置加载失败，已使用默认空配置');
       }).finally(() => setLoading(false));
-    }, []);
+    }, [onErrorMessage]);
 
-    // 暴露 save 方法给父组件
     useImperativeHandle(ref, () => ({
       save: async () => {
         setSaving(true);
@@ -49,11 +163,17 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
             api_key: apiKey,
             base_url: baseUrl,
             model,
+            chat_template_kwargs: { enable_thinking: enableThinking },
           };
           if (temperature !== null) body.temperature = temperature;
           if (maxTokens !== null) body.max_tokens = maxTokens;
           if (timeout !== null) body.timeout = timeout;
-          body.chat_template_kwargs = { enable_thinking: enableThinking };
+          body.extraction_api_key = extractionApiKey;
+          body.extraction_base_url = extractionBaseUrl;
+          body.extraction_model = extractionModel;
+          if (extractionMaxTokens !== null) body.extraction_max_tokens = extractionMaxTokens;
+          if (extractionTimeout !== null) body.extraction_timeout = extractionTimeout;
+
           const resp = await settingsApi.updateAiConfig(body as any);
           if (resp.success) {
             onSuccessMessage?.('AI 大模型配置已更新');
@@ -72,271 +192,134 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
 
     if (loading) {
       return (
-        <div
-          className="rounded-xl shadow-sm overflow-hidden"
-          style={{
-            backgroundColor: 'var(--color-bg-secondary)',
-            border: '1px solid var(--color-border)',
-          }}
+        <section
+          className="rounded-lg border p-6"
+          style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
         >
-          <div className="p-6 flex items-center justify-center gap-2">
-            <Loader2 className="w-5 h-5 animate-spin" />
-            <span style={{ color: 'var(--color-text-secondary)' }}>加载配置中...</span>
+          <div className="flex items-center justify-center gap-2 text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+            <Loader2 className="h-5 w-5 animate-spin" />
+            加载配置中...
           </div>
-        </div>
+        </section>
       );
     }
 
+    const extractionReused = !extractionBaseUrl && !extractionApiKey;
+
     return (
-      <div
-        className="rounded-xl shadow-sm overflow-hidden"
-        style={{
-          backgroundColor: 'var(--color-bg-secondary)',
-          border: '1px solid var(--color-border)',
-        }}
+      <section
+        className="overflow-hidden rounded-lg border"
+        style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
       >
-        <div
-          className="border-b px-6 py-4 flex items-center gap-3"
-          style={{
-            backgroundColor: 'var(--color-bg-primary)',
-            borderColor: 'var(--color-border)',
-          }}
-        >
-          <Sliders className="w-5 h-5" style={{ color: 'var(--color-accent)' }} />
-          <h2 className="text-base font-bold flex items-center gap-2" style={{ color: 'var(--color-text-primary)' }}>
-            AI 大模型中枢引擎配置
-            <span
-              className="text-[10px] font-bold px-2 py-0.5 rounded-md border flex items-center gap-1"
-              style={{
-                color: 'var(--color-accent)',
-                borderColor: 'var(--color-accent)',
-                backgroundColor: 'var(--color-accent-light)',
-              }}
-            >
-              <Cpu className="w-3 h-3" />
-              海光DCU
+        <div className="flex flex-col gap-3 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between" style={{ borderColor: 'var(--color-border)' }}>
+          <div>
+            <div className="flex items-center gap-2">
+              <Sliders className="h-5 w-5" style={{ color: 'var(--color-accent)' }} />
+              <h2 className="text-base font-bold" style={labelStyle}>
+                AI 模型配置
+              </h2>
+            </div>
+            <p className="mt-1 text-xs" style={mutedStyle}>
+              主模型负责诊断结论，提取模型负责日志预处理。
+            </p>
+          </div>
+          {saving && (
+            <span className="inline-flex items-center gap-2 text-xs font-bold" style={{ color: 'var(--color-accent)' }}>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              保存中
             </span>
-          </h2>
-          <span
-            className="ml-auto text-[11px] font-bold px-2.5 py-1 rounded-full uppercase tracking-widest"
-            style={{
-              backgroundColor: 'var(--color-accent-light)',
-              color: 'var(--color-accent)',
-              border: '1px solid var(--color-accent)',
-            }}
-          >
-            OpenAI 兼容协议组
-          </span>
+          )}
         </div>
 
-        <div className="p-6 space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label
-                className="block text-[13px] font-bold tracking-wide"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                接口网关地址 (Base URL)
-              </label>
-              <input
-                type="text"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                className="w-full h-11 border rounded-lg px-4 text-sm outline-none transition-all shadow-sm font-mono"
-                style={{
-                  borderColor: 'var(--color-border)',
-                  backgroundColor: 'var(--color-bg-primary)',
-                  color: 'var(--color-text-primary)',
-                }}
-                placeholder="https://api.openai.com/v1"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label
-                className="block text-[13px] font-bold tracking-wide"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                鉴权密钥 (API Key)
-              </label>
-              <div className="relative">
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  className="w-full h-11 border rounded-lg pl-10 pr-4 text-sm outline-none transition-all shadow-sm font-mono"
-                  style={{
-                    borderColor: 'var(--color-border)',
-                    backgroundColor: 'var(--color-bg-primary)',
-                    color: 'var(--color-text-primary)',
-                  }}
-                  placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
-                />
-                <Key
-                  className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2"
-                  style={{ color: 'var(--color-text-secondary)' }}
-                />
-              </div>
+        <div className="space-y-6 p-5">
+          <div className="space-y-4">
+            <SectionTitle
+              icon={<Brain className="h-4 w-4" />}
+              title="诊断回答模型"
+              description="建议选择推理能力更强的模型，用于根因分析和维修建议生成。"
+              badge="OpenAI 兼容"
+            />
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <TextField label="Base URL" value={baseUrl} onChange={setBaseUrl} placeholder="https://api.openai.com/v1" icon={<Link2 className="h-4 w-4" />} />
+              <TextField label="API Key" value={apiKey} onChange={setApiKey} placeholder="sk-xxxxxxxx" type="password" icon={<Key className="h-4 w-4" />} />
+              <TextField label="Model ID" value={model} onChange={setModel} placeholder="deepseek-reasoner" />
             </div>
           </div>
 
-          <div
-            className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t"
-            style={{ borderColor: 'var(--color-border)' }}
-          >
-            <div className="space-y-2">
-              <label
-                className="block text-[13px] font-bold tracking-wide"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                指定推理核心 (Model ID)
-              </label>
-              <input
-                type="text"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                className="w-full h-11 border rounded-lg px-4 text-sm outline-none transition-all shadow-sm font-mono"
-                style={{
-                  borderColor: 'var(--color-border)',
-                  backgroundColor: 'var(--color-bg-primary)',
-                  color: 'var(--color-text-primary)',
-                }}
-                placeholder="gpt-4-turbo"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label
-                className="flex items-center justify-between text-[13px] font-bold tracking-wide"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                <span>上下文 Token 上限</span>
-                <span
-                  className="font-mono font-bold px-2.5 py-0.5 rounded text-xs"
-                  style={{
-                    backgroundColor: 'var(--color-accent-light)',
-                    color: 'var(--color-accent)',
-                  }}
-                >
-                  {maxTokens !== null ? maxTokens.toLocaleString() : '—'}
-                </span>
-              </label>
-              <input
-                type="number"
-                value={maxTokens ?? ''}
-                onChange={(e) => setMaxTokens(e.target.value ? Math.max(1, parseInt(e.target.value) || 0) : null)}
-                className="w-full h-11 border rounded-lg px-4 text-sm outline-none transition-all shadow-sm font-mono"
-                style={{
-                  borderColor: 'var(--color-border)',
-                  backgroundColor: 'var(--color-bg-primary)',
-                  color: 'var(--color-text-primary)',
-                }}
-                min={1}
-                placeholder="28000"
-              />
-              <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
-                超过上限的日志和知识库内容将被自动截断。建议设为模型最大上下文 - 4096。
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <label
-                className="flex items-center justify-between text-[13px] font-bold tracking-wide"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                <span>推理发散阈值 (Temperature)</span>
-                <span
-                  className="font-mono font-bold px-2.5 py-0.5 rounded text-xs"
-                  style={{
-                    backgroundColor: 'var(--color-accent-light)',
-                    color: 'var(--color-accent)',
-                  }}
-                >
-                  {temperature !== null ? temperature.toFixed(2) : '—'}
-                </span>
-              </label>
-              <div className="flex items-center gap-4 h-11">
-                <input
-                  type="range"
-                  min="0"
-                  max="2"
-                  step="0.1"
-                  value={temperature ?? 0.7}
-                  onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                  className="flex-1 outline-none"
-                  style={{ accentColor: 'var(--color-accent)' }}
-                />
-              </div>
+          <div className="space-y-4 border-t pt-5" style={{ borderColor: 'var(--color-border)' }}>
+            <SectionTitle
+              icon={<Zap className="h-4 w-4" />}
+              title="日志提取模型"
+              description="留空时复用诊断回答模型，单模型部署时无需重复填写。"
+              badge={extractionReused ? '复用主模型' : '独立配置'}
+            />
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <TextField label="Base URL" value={extractionBaseUrl} onChange={setExtractionBaseUrl} placeholder="留空复用主模型" icon={<Link2 className="h-4 w-4" />} />
+              <TextField label="API Key" value={extractionApiKey} onChange={setExtractionApiKey} placeholder="留空复用主模型" type="password" icon={<Key className="h-4 w-4" />} />
+              <TextField label="Model ID" value={extractionModel} onChange={setExtractionModel} placeholder="gpt-4o-mini / deepseek-chat" />
             </div>
           </div>
 
-          <div
-            className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t"
-            style={{ borderColor: 'var(--color-border)' }}
-          >
-            <div className="space-y-3">
-              <label
-                className="flex items-center gap-2 text-[13px] font-bold tracking-wide"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                <Brain className="w-4 h-4" style={{ color: 'var(--color-accent)' }} />
-                深度思考模式
-              </label>
-              <label
-                className="relative inline-flex items-center cursor-pointer"
-              >
-                <input
-                  type="checkbox"
-                  checked={enableThinking}
-                  onChange={(e) => setEnableThinking(e.target.checked)}
-                  className="sr-only peer"
-                />
-                <div
-                  className="w-11 h-6 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"
-                  style={{
-                    backgroundColor: enableThinking ? 'var(--color-accent)' : 'var(--color-border)',
-                  }}
-                ></div>
-                <span
-                  className="ms-3 text-sm font-medium"
-                  style={{ color: 'var(--color-text-secondary)' }}
-                >
-                  {enableThinking ? '开启' : '关闭'}
-                </span>
-              </label>
-              <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
-                开启后模型会展示思考过程，关闭可加快响应速度并减少 Token 消耗
-              </p>
-            </div>
+          <div className="grid grid-cols-1 gap-4 border-t pt-5 md:grid-cols-2 xl:grid-cols-4" style={{ borderColor: 'var(--color-border)' }}>
+            <NumberField label="诊断 Token 上限" value={maxTokens} onChange={setMaxTokens} placeholder="28000" icon={<Hash className="h-3.5 w-3.5" />} />
+            <NumberField label="诊断超时秒数" value={timeout} onChange={setTimeout_} placeholder="300" min={10} icon={<Clock className="h-3.5 w-3.5" />} />
+            <NumberField label="提取 Token 上限" value={extractionMaxTokens} onChange={setExtractionMaxTokens} placeholder="28000" icon={<Hash className="h-3.5 w-3.5" />} />
+            <NumberField label="提取超时秒数" value={extractionTimeout} onChange={setExtractionTimeout} placeholder="300" min={10} icon={<Clock className="h-3.5 w-3.5" />} />
+          </div>
 
-            <div className="space-y-2">
-              <label
-                className="flex items-center gap-2 text-[13px] font-bold tracking-wide"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                <Clock className="w-4 h-4" style={{ color: 'var(--color-accent)' }} />
-                请求超时时间 (秒)
-              </label>
+          <div className="grid grid-cols-1 gap-4 border-t pt-5 md:grid-cols-[minmax(0,1fr)_240px]" style={{ borderColor: 'var(--color-border)' }}>
+            <label className="block space-y-3">
+              <span className="flex items-center justify-between gap-3 text-xs font-bold" style={labelStyle}>
+                <span className="inline-flex items-center gap-1.5">
+                  <Thermometer className="h-3.5 w-3.5" />
+                  Temperature
+                </span>
+                <span className="rounded px-2 py-0.5 font-mono text-[11px]" style={{ backgroundColor: 'var(--color-accent-light)', color: 'var(--color-accent)' }}>
+                  {temperature !== null ? temperature.toFixed(2) : '默认'}
+                </span>
+              </span>
               <input
-                type="number"
-                value={timeout ?? ''}
-                onChange={(e) => setTimeout_(e.target.value ? Math.max(10, parseInt(e.target.value) || 0) : null)}
-                className="w-full h-11 border rounded-lg px-4 text-sm outline-none transition-all shadow-sm font-mono"
-                style={{
-                  borderColor: 'var(--color-border)',
-                  backgroundColor: 'var(--color-bg-primary)',
-                  color: 'var(--color-text-primary)',
-                }}
-                min={10}
-                placeholder="300"
+                type="range"
+                min="0"
+                max="2"
+                step="0.1"
+                value={temperature ?? 0.7}
+                onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                className="w-full outline-none"
+                style={{ accentColor: 'var(--color-accent)' }}
               />
-              <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
-                建议 60-600 秒，模型推理时间较长时可适当增加
-              </p>
+            </label>
+
+            <div
+              className="flex items-center justify-between gap-4 rounded-lg border px-4 py-3"
+              style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}
+            >
+              <div>
+                <div className="text-xs font-bold" style={labelStyle}>
+                  深度思考
+                </div>
+                <div className="mt-1 text-[11px]" style={mutedStyle}>
+                  {enableThinking ? '已开启' : '已关闭'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEnableThinking((v) => !v)}
+                className="relative h-6 w-11 rounded-full transition"
+                style={{ backgroundColor: enableThinking ? 'var(--color-accent)' : 'var(--color-border)' }}
+                aria-pressed={enableThinking}
+                aria-label="切换深度思考模式"
+              >
+                <span
+                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                    enableThinking ? 'translate-x-5' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
             </div>
           </div>
         </div>
-      </div>
+      </section>
     );
   }
 );

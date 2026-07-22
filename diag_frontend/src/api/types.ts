@@ -18,6 +18,7 @@ export interface DiagnosisResult {
   test_logs: TestLogItem[];
   failed_test_logs?: TestLogItem[];
   failed_log_files?: FailedLogFile[];
+  merged_error_log?: string;
   similar_cases: SimilarCaseItem[];
 }
 
@@ -96,6 +97,26 @@ export interface GlobalAiConfig {
   temperature: number | null; max_tokens: number | null;
   provider: string; chat_template_kwargs: { enable_thinking: boolean } | null;
   timeout: number | null; updated_at: string; updated_by: string;
+  // 错误日志提取模型（快速）—— 留空表示复用上方回答模型配置
+  extraction_api_key: string; extraction_base_url: string; extraction_model: string;
+  extraction_max_tokens: number | null; extraction_timeout: number | null;
+}
+
+export interface LogExtractionPrompt {
+  model: string;
+  is_default: boolean;
+  system_prompt: string;
+  user_template: string;
+  updated_at: string;
+  updated_by: string;
+}
+
+export interface MachineModelsResponse {
+  models: string[];
+}
+
+export interface LogExtractionPromptsResponse {
+  prompts: LogExtractionPrompt[];
 }
 
 export type DiagnosisRating = 'solved' | 'partially' | 'unsolved';

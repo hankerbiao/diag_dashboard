@@ -3,7 +3,6 @@ import json
 import logging
 from ..core.utils import (
     utc_now_iso,
-    is_test_failed,
     is_sims_record_failed,
     validate_log_path,
     parse_object_id,
@@ -13,6 +12,7 @@ from typing import Awaitable, Callable, Optional
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from ..core.auth import get_current_user
 from ..core.factory_config import get_factory_by_id, load_factories_from_yaml
@@ -37,7 +37,6 @@ from ..services.llm_service import llm_service
 from ..services.knowledge_graph import knowledge_graph
 from ..services.mes_direct_service import MESDirectService, MESRequestError
 from ..services import ragflow_service
-from ..services.log_extractor import ContextExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +58,12 @@ async def _gather_sn_data(
     sn: str,
     factory: str,
     on_progress: Optional[Callable[[str, str], Awaitable[None]]] = None,
-) -> tuple[dict, list[dict], list[dict], list[dict], list[dict], str, list[dict], list[dict]]:
+) -> tuple[dict, list[dict], list[dict], list[dict], list[dict], str, list[dict], list[dict], str]:
     """收集 SN 诊断所需数据。
 
     Returns:
-        (device, llm_logs, maintenance, all_logs, similar_cases, kb_context, failed_logs, failed_log_files)
+        (device, llm_logs, maintenance, all_logs, similar_cases, kb_context,
+         failed_logs, failed_log_files, merged_error_log)
     """
     async def _progress(s: str, d: str):
         if on_progress:
@@ -184,14 +184,18 @@ async def _gather_sn_data(
 
     llm_logs = all_logs
 
-    log_file_context, failed_log_files = await _download_failed_item_logs(
+    _log_file_context, failed_log_files = await _download_failed_item_logs(
         log_base_url=factory_cfg.get("log_base_url", ""),
         failed_logs=failed_logs,
         factory_label=factory_label,
         ftp_user=factory_cfg.get("log_ftp_user"),
         ftp_password=factory_cfg.get("log_ftp_password"),
         on_progress=_progress if on_progress else None,
+        sn=sn,
+        factory=factory,
+        machine_model=(device or {}).get("model", ""),
     )
+    merged_error_log = _merge_extracted_log_files(sn, failed_log_files)
 
     if failed_logs:
         await _progress("cases", f"正在匹配历史案例（{len(failed_logs)} 条失败项）...")
@@ -227,7 +231,10 @@ async def _gather_sn_data(
                     if val:
                         search_terms.append(val)
 
-        query = " ".join(search_terms[:15]) if search_terms else ""
+        query_parts = search_terms[:15]
+        if merged_error_log:
+            query_parts.append(merged_error_log[:12_000])
+        query = "\n".join(query_parts)
         logger.debug("知识库检索 _gather_sn_data", extra={"sn": sn, "query": query[:200]})
         if query.strip():
             kb_result = await ragflow_service.search_knowledge_base(
@@ -251,8 +258,9 @@ async def _gather_sn_data(
     except Exception as e:
         logger.warning("知识库检索失败", extra={"sn": sn, "query": query[:200] if query else "", "error": str(e), "error_type": type(e).__name__})
 
-    if log_file_context:
-        kb_context = f"{kb_context}\n\n{log_file_context}" if kb_context else log_file_context
+    if merged_error_log:
+        merged_section = f"## 聚合错误日志（自适应提取）\n{merged_error_log}"
+        kb_context = f"{kb_context}\n\n{merged_section}" if kb_context else merged_section
 
     return (
         device,
@@ -263,7 +271,31 @@ async def _gather_sn_data(
         kb_context,
         failed_logs,
         failed_log_files,
+        merged_error_log,
     )
+
+
+def _merge_extracted_log_files(sn: str, log_files: list[dict]) -> str:
+    """Build the consolidated UTF-8 artifact used by RAG, diagnosis, and download."""
+    if not log_files:
+        return ""
+    parts = [f"# SN {sn} 聚合错误日志", f"日志文件数: {len(log_files)}"]
+    for index, log_file in enumerate(log_files, 1):
+        parts.extend(
+            [
+                "",
+                f"## [{index}] {log_file.get('test_item', '未知测试项')}",
+                f"测试时间: {log_file.get('test_time', '')}",
+                f"日志路径: {log_file.get('log_path', '')}",
+                (
+                    f"提取结果: {log_file.get('matched_lines', 0)} 个错误模式 / "
+                    f"原日志 {log_file.get('total_lines', 0)} 行"
+                ),
+                "",
+                str(log_file.get("extracted_content", "")),
+            ]
+        )
+    return "\n".join(parts).strip() + "\n"
 
 
 def _map_test_log_items(logs: list[dict]) -> list:
@@ -292,6 +324,7 @@ def _build_sn_response(
     similar_cases: list[dict],
     failed_logs: Optional[list[dict]] = None,
     failed_log_files: Optional[list[dict]] = None,
+    merged_error_log: str = "",
 ) -> DiagnosisResponse:
     return DiagnosisResponse(
         sn=sn,
@@ -315,6 +348,7 @@ def _build_sn_response(
         test_logs=_map_test_log_items(all_logs[:10]),
         failed_test_logs=_map_test_log_items((failed_logs or [])[:20]),
         failed_log_files=failed_log_files or [],
+        merged_error_log=merged_error_log,
         similar_cases=[
             dict(
                 id=c.get("id", ""),
@@ -341,6 +375,7 @@ async def diagnose_by_sn(
             kb_context,
             failed_logs,
             failed_log_files,
+            merged_error_log,
         ) = await _gather_sn_data(request.sn, request.factory)
         diagnosis = await llm_service.diagnose_sn(
             request.sn,
@@ -365,7 +400,14 @@ async def diagnose_by_sn(
         return ApiResponse(
             success=True,
             data=_build_sn_response(
-                request.sn, diagnosis, maintenance, all_logs, similar_cases, failed_logs, failed_log_files
+                request.sn,
+                diagnosis,
+                maintenance,
+                all_logs,
+                similar_cases,
+                failed_logs,
+                failed_log_files,
+                merged_error_log,
             ),
         )
     except ValueError as e:
@@ -596,9 +638,9 @@ def _resolve_log_download_config(
 ) -> tuple[str, Optional[str], Optional[str]]:
     """解析日志下载地址与 FTP 凭据（查询参数优先，否则用厂区 YAML）。"""
     factory_info = get_factory_by_id(factory_id) if factory_id else None
-    base_url = (log_base_url_query or "").strip() or (
-        (factory_info or {}).get("log_base_url") or ""
-    )
+    configured_url = ((factory_info or {}).get("log_base_url") or "").strip()
+    # A known factory is authoritative; do not let clients redirect server-side downloads.
+    base_url = configured_url or (log_base_url_query or "").strip()
     if not factory_info:
         return base_url, None, None
     return (
@@ -611,6 +653,29 @@ def _resolve_log_download_config(
 # ── 智能日志提取（替代原本的简单 tail 截断） ──
 
 
+async def _resolve_machine_model(sn: str, factory: str) -> str:
+    """解析 SN 对应的机型（用于选择按机型配置的提取 prompt）。
+
+    优先查 devices 集合，回退 MES 实时查询；均失败返回 ""（使用默认 prompt）。
+    """
+    if not sn:
+        return ""
+    try:
+        device = await knowledge_graph.get_device_by_sn(sn)
+        if device and device.get("model"):
+            return str(device["model"])
+    except Exception as e:  # noqa: BLE001
+        logger.debug("get_device_by_sn 解析机型失败 sn=%s: %s", sn, e)
+    try:
+        async with MESDirectService() as mes:
+            server = await mes.get_server(factory, sn)
+            if server and getattr(server, "model", ""):
+                return str(server.model)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("mes.get_server 解析机型失败 sn=%s: %s", sn, e)
+    return ""
+
+
 async def _download_and_extract_log(
     log_base_url: str,
     log_path: str,
@@ -618,28 +683,31 @@ async def _download_and_extract_log(
     ftp_user: Optional[str] = None,
     ftp_password: Optional[str] = None,
     extraction_mode: str = "balanced",
+    sn: str = "",
+    factory: str = "",
+    machine_model: str = "",
+    on_progress: Optional[Callable[[str, str], Awaitable[None]]] = None,
 ) -> tuple[str, dict]:
     """
-    下载日志文件并执行两级提取。
+    下载日志文件并执行「智能日志提取」（独立日志处理模块）。
 
-    第 1 级 — 编码级上下文提取（ContextExtractor）：
-      基于正则模式匹配，快速定位错误/异常行，提取上下文窗口。
-      无 AI 开销，毫秒级完成。
-
-    第 2 级 — AI 级精炼（可选，由外部调用方决定）：
-      如果编码结果仍超预算，可再调用 llm_service.extract_log_with_llm()。
+    流程：解析机型对应 prompt → 按提取模型上下文窗口分段 →
+    并发调用快速提取模型抽取各段错误 → 聚合；AI 不可用 / 全部失败时回退编码级提取。
 
     返回:
         (extracted_text, stats_dict)
-        stats_dict 包含 matched_lines/paragraphs/total_lines 等统计信息，
-        可用于提示词中的上下文标注。
+        stats_dict 含 ai_extracted / segment_count / model_used / error_count 等字段。
     """
-    from ..services.log_extractor import extract_log_context
+    from ..services.log_processing import process_log
+
+    safe_log_path = validate_log_path(log_path)
+    if on_progress:
+        await on_progress("log_download", f"正在下载日志 {safe_log_path.rsplit('/', 1)[-1]}")
 
     # 下载完整日志
     content, dl_error = await _download_log_tail_fetch_full(
         log_base_url,
-        log_path,
+        safe_log_path,
         ftp_user=ftp_user,
         ftp_password=ftp_password,
     )
@@ -648,10 +716,18 @@ async def _download_and_extract_log(
     if not content.strip():
         return "", {"error": "日志内容为空", "matched_lines": 0, "paragraphs": 0, "total_lines": 0}
 
-    # 编码级上下文提取
-    extracted, stats = extract_log_context(content, mode=extraction_mode)
+    # 解析机型（若调用方未显式传入）
+    if not machine_model:
+        machine_model = await _resolve_machine_model(sn, factory)
 
-    return extracted, stats
+    # 智能提取（AI 分段并发，失败/未配置自动回退编码级）
+    result = await process_log(
+        content,
+        machine_model,
+        mode=extraction_mode,
+        on_progress=on_progress,
+    )
+    return result["extracted"], result["stats"]
 
 
 async def _download_log_tail_fetch_full(
@@ -665,7 +741,7 @@ async def _download_log_tail_fetch_full(
     获取日志完整内容（供智能提取使用），使用 MAX_LOG_BYTES 安全上限。
     与 _download_log_tail 共享底层下载逻辑但不做尾部截断。
     """
-    from ..core.utils import build_log_download_url, validate_log_path
+    from ..core.utils import build_log_download_url
 
     if not log_base_url or not log_path:
         return "", "log_base_url 或 log_path 为空"
@@ -778,6 +854,9 @@ async def _download_failed_item_logs(
     ftp_password: Optional[str] = None,
     on_progress: Optional[Callable[[str, str], Awaitable[None]]] = None,
     max_files: int = 5,
+    sn: str = "",
+    factory: str = "",
+    machine_model: str = "",
 ) -> tuple[str, list[dict]]:
     """下载失败项原文日志（使用智能提取替代简单 tail 截断）。
 
@@ -798,7 +877,7 @@ async def _download_failed_item_logs(
 
     if on_progress:
         await on_progress(
-            "logfiles",
+            "log_download",
             f"正在下载并提取失败项原文日志（最多 {min(len(with_path), max_files)} 个）...",
         )
 
@@ -808,13 +887,17 @@ async def _download_failed_item_logs(
 
     for fl in with_path[:max_files]:
         log_path = (fl.get("log_path") or "").strip()
-        # 使用智能提取（编码级上下文提取）替代原本的 tail 截断
+        # 使用智能提取（AI 分段并发 + 编码级回退）替代原本的 tail 截断
         extracted, stats = await _download_and_extract_log(
             log_base_url,
             log_path,
             ftp_user=ftp_user,
             ftp_password=ftp_password,
             extraction_mode="balanced",
+            sn=sn,
+            factory=factory,
+            machine_model=machine_model,
+            on_progress=on_progress,
         )
         dl_error = stats.get("error")
         if dl_error:
@@ -830,15 +913,25 @@ async def _download_failed_item_logs(
             "test_time": str(fl.get("test_time", "")),
             "log_path": log_path,
             "extracted_content": extracted,
-            "matched_lines": stats.get("matched_lines", 0),
+            "matched_lines": stats.get("matched_lines", stats.get("error_count", 0)),
             "total_lines": stats.get("total_lines", 0),
         })
+
+        if stats.get("ai_extracted"):
+            scan_label = (
+                f"（AI 提取: {stats.get('error_count', 0)} 个错误点 / "
+                f"{stats.get('segment_count', 0)} 段 / 机型: {stats.get('model_used', 'default')}）"
+            )
+        else:
+            scan_label = (
+                f"（编码扫描: {stats.get('matched_lines', 0)} 个错误行 / "
+                f"{stats.get('paragraphs', 0)} 个段落 / 共 {stats.get('total_lines', 0)} 行）"
+            )
 
         blocks.append(
             f"### [{fl.get('test_time', '')}] {fl.get('test_item', '')}\n"
             f"路径: {log_path}\n"
-            f"（编码扫描: {stats.get('matched_lines', 0)} 个错误行 / "
-            f"{stats.get('paragraphs', 0)} 个段落 / 共 {stats.get('total_lines', 0)} 行）\n"
+            f"{scan_label}\n"
             f"```\n{extracted}\n```"
         )
 
@@ -852,9 +945,9 @@ async def _download_failed_item_logs(
         msg = f"已提取 {len(blocks)} 份失败项原文日志"
         if errors:
             msg += f"（{len(errors)} 条下载失败已跳过）"
-        await on_progress("logfiles", msg)
+        await on_progress("log_merge", msg)
 
-    markdown = "\n\n## 失败项原文日志（SIMS log_path — 编码级上下文提取）\n" + "\n\n".join(blocks)
+    markdown = "\n\n## 失败项原文日志（SIMS log_path — 智能提取）\n" + "\n\n".join(blocks)
     return markdown, failed_log_files
 
 
@@ -951,7 +1044,7 @@ def _describe_ftp_error(
     import ftplib
 
     parts = [
-        f"FTP 日志下载失败",
+        "FTP 日志下载失败",
         f"host={host}:{port}",
         f"path={path or '/'}",
         f"user={auth_user or 'anonymous'}",
@@ -1226,13 +1319,15 @@ async def analyze_error_log_with_kb(
                     success=False,
                     error="该记录有日志路径但厂区 log_base_url 未配置，已中止 AI 诊断。",
                 )
-            # 使用智能提取（编码级上下文提取）替代原本的 tail 截断
+            # 使用智能提取（AI 分段并发 + 编码级回退）替代原本的 tail 截断
             extracted, stats = await _download_and_extract_log(
                 resolved_url,
                 log_path,
                 ftp_user=ftp_user,
                 ftp_password=ftp_password,
                 extraction_mode="balanced",
+                sn=sn,
+                factory=error_log.get("factory_id", ""),
             )
             dl_error = stats.get("error")
             if dl_error:
@@ -1242,12 +1337,18 @@ async def analyze_error_log_with_kb(
             # 将提取结果存入 log_tail（兼容原有缓存结构）
             log_tail = extracted
             log_stats = stats
-            stat_line = (
-                f"（编码扫描: {stats.get('matched_lines', 0)} 个错误行 / "
-                f"{stats.get('paragraphs', 0)} 个段落 / 共 {stats.get('total_lines', 0)} 行）"
-            )
+            if stats.get("ai_extracted"):
+                stat_line = (
+                    f"（AI 提取: {stats.get('error_count', 0)} 个错误点 / "
+                    f"{stats.get('segment_count', 0)} 段 / 机型: {stats.get('model_used', 'default')}）"
+                )
+            else:
+                stat_line = (
+                    f"（编码扫描: {stats.get('matched_lines', 0)} 个错误行 / "
+                    f"{stats.get('paragraphs', 0)} 个段落 / 共 {stats.get('total_lines', 0)} 行）"
+                )
             sections.append(
-                f"## 日志文件内容（编码级上下文提取）\n{stat_line}\n```\n{extracted}\n```"
+                f"## 聚合错误日志（自适应提取）\n{stat_line}\n```\n{extracted}\n```"
             )
 
         refs_result = []
@@ -1261,6 +1362,7 @@ async def analyze_error_log_with_kb(
                         error_log.get("fault_type1", ""),
                         error_log.get("fault_type2", ""),
                         error_log.get("fault_type3", ""),
+                        log_tail[:12_000],
                     ],
                 )
             )
@@ -1343,7 +1445,11 @@ async def analyze_error_log_with_kb(
             sections = truncated
             logger.info("上下文截断完成: sections=%d", len(sections))
 
-        error_count = log_stats.get("matched_lines", 0) if log_path else 0
+        error_count = (
+            log_stats.get("error_count", log_stats.get("matched_lines", 0))
+            if log_path
+            else 0
+        )
         analysis = await llm_service.analyze_with_knowledge(
             error_log, "\n\n".join(sections), error_count=error_count
         )
@@ -1409,56 +1515,84 @@ async def re_analyze_error_log(
 async def diagnose_sn_stream(
     request: DiagnosisBySNRequest, current_user: dict = Depends(get_current_user)
 ):
-    try:
-        (
-            device,
-            llm_logs,
-            maintenance,
-            all_logs,
-            similar_cases,
-            kb_context,
-            failed_logs,
-            failed_log_files,
-        ) = await _gather_sn_data(request.sn, request.factory)
+    async def event_stream():
+        queue: asyncio.Queue[dict] = asyncio.Queue()
 
-        diagnosis = await llm_service.diagnose_sn(
-            request.sn,
-            device,
-            llm_logs,
-            maintenance,
-            similar_cases,
-            kb_context=kb_context,
-            failed_logs=failed_logs,
-        )
+        async def progress(stage: str, detail: str) -> None:
+            await queue.put({"type": "progress", "stage": stage, "detail": detail})
 
-        logger.info(
-            "SN 诊断完成",
-            extra={
-                "sn": request.sn,
-                "factory": request.factory,
-                "test_logs_count": len(llm_logs),
-                "similar_cases_count": len(similar_cases),
-                "kb_context_length": len(kb_context) if kb_context else 0,
-                "failed_log_files": len(failed_log_files),
-            },
-        )
-        return ApiResponse(
-            success=True,
-            data=_build_sn_response(
-                request.sn, diagnosis, maintenance, all_logs, similar_cases, failed_logs, failed_log_files
-            ),
-        )
-    except ValueError as e:
-        logger.warning(
-            "SN 诊断参数错误",
-            extra={"sn": request.sn, "factory": request.factory, "error": str(e)},
-        )
-        return ApiResponse(success=False, error=str(e))
-    except Exception as e:
-        logger.exception(
-            "SN 诊断失败", extra={"sn": request.sn, "factory": request.factory}
-        )
-        return ApiResponse(success=False, error=f"诊断失败: {e}")
+        async def run_diagnosis() -> None:
+            try:
+                (
+                    device,
+                    llm_logs,
+                    maintenance,
+                    all_logs,
+                    similar_cases,
+                    kb_context,
+                    failed_logs,
+                    failed_log_files,
+                    merged_error_log,
+                ) = await _gather_sn_data(
+                    request.sn,
+                    request.factory,
+                    on_progress=progress,
+                )
+
+                await progress("llm", "正在结合聚合错误日志和知识库进行诊断")
+                diagnosis = await llm_service.diagnose_sn(
+                    request.sn,
+                    device,
+                    llm_logs,
+                    maintenance,
+                    similar_cases,
+                    kb_context=kb_context,
+                    failed_logs=failed_logs,
+                )
+                response = _build_sn_response(
+                    request.sn,
+                    diagnosis,
+                    maintenance,
+                    all_logs,
+                    similar_cases,
+                    failed_logs,
+                    failed_log_files,
+                    merged_error_log,
+                )
+                await queue.put({"type": "result", "data": response.model_dump()})
+            except ValueError as exc:
+                logger.warning(
+                    "SN 诊断参数错误",
+                    extra={
+                        "sn": request.sn,
+                        "factory": request.factory,
+                        "error": str(exc),
+                    },
+                )
+                await queue.put({"type": "error", "error": str(exc)})
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "SN 诊断失败",
+                    extra={"sn": request.sn, "factory": request.factory},
+                )
+                await queue.put({"type": "error", "error": f"诊断失败: {exc}"})
+
+        task = asyncio.create_task(run_diagnosis())
+        try:
+            while True:
+                event = await queue.get()
+                yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
+                if event.get("type") in {"result", "error"}:
+                    break
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── SN 诊断历史记录 ──

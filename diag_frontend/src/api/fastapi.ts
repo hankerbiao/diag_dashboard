@@ -7,7 +7,8 @@ export type {
   PaginatedResponse,
   FaultCategoryItem, YieldTrendItem, StationFailureItem, DecisionDistributionItem,
   ModelDefectItem, DashboardInsights, KnowledgeDoc, GlobalAiConfig,
-  DiagnosisFeedback, DiagnosisFeedbackParams, DiagnosisRating
+  DiagnosisFeedback, DiagnosisFeedbackParams, DiagnosisRating,
+  LogExtractionPrompt, MachineModelsResponse, LogExtractionPromptsResponse
 } from './types';
 export { diagnosisApi } from './diagnosis';
 export { factoryApi, syncApi } from './sync';

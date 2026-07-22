@@ -73,6 +73,7 @@ class DiagnosisResponse(BaseModel):
     test_logs: list[TestLogItem] = []
     failed_test_logs: list[TestLogItem] = []
     failed_log_files: list[FailedLogFile] = []
+    merged_error_log: str = ""
     similar_cases: list[SimilarCaseItem] = []
 
 
