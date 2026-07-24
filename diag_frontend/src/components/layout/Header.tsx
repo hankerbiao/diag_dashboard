@@ -1,4 +1,4 @@
-import { LogIn, LogOut } from 'lucide-react';
+import { LogIn, LogOut, Menu } from 'lucide-react';
 import type { NavigationTab } from '../../types';
 import type { FactorySite } from '../../api/fastapi';
 import ThemeToggle from '../common/ThemeToggle';
@@ -9,42 +9,56 @@ interface HeaderProps {
   factory: string;
   factories: FactorySite[];
   onFactoryChange: (factoryId: string) => void;
+  onMenuClick: () => void;
 }
 
 const TAB_TITLES: Record<NavigationTab, string> = {
   diagnosis: '单机 SN 深度诊断',
   error_logs: '批量测试异常看板',
   knowledge_base: '知识库管理',
+  feedback: '诊断反馈管理',
   settings: '系统管理与 AI 引擎配置',
 };
 
-const TABS_WITH_FACTORY = new Set<NavigationTab>(['diagnosis', 'error_logs']);
+const TABS_WITH_FACTORY = new Set<NavigationTab>(['error_logs', 'feedback']);
 
 function getInitials(email: string): string {
   const name = email.split('@')[0];
   return name.slice(0, 2).toUpperCase();
 }
 
-export default function Header({ activeTab, factory, factories, onFactoryChange }: HeaderProps) {
+export default function Header({ activeTab, factory, factories, onFactoryChange, onMenuClick }: HeaderProps) {
   const { user, signOut } = useAuth();
 
   return (
     <header
-      className="h-[60px] border-b flex items-center justify-between px-6 shrink-0 shadow-sm z-10 w-full relative"
+      className="relative z-10 flex h-[60px] w-full shrink-0 items-center justify-between gap-3 border-b px-3 shadow-sm sm:px-6"
       style={{
         backgroundColor: 'var(--color-bg-secondary)',
         borderColor: 'var(--color-border)',
         color: 'var(--color-text-primary)',
       }}
     >
-      <h1
-        className="text-sm font-bold tracking-wide"
-        style={{ color: 'var(--color-text-primary)' }}
-      >
-        {TAB_TITLES[activeTab]}
-      </h1>
+      <div className="flex min-w-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={onMenuClick}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg md:hidden"
+          style={{ color: 'var(--color-text-secondary)' }}
+          aria-label="打开导航菜单"
+          title="打开导航"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+        <h1
+          className="truncate text-xs font-bold sm:text-sm"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
+          {TAB_TITLES[activeTab]}
+        </h1>
+      </div>
 
-      <div className="flex items-center gap-4 text-xs font-medium">
+      <div className="flex shrink-0 items-center gap-2 text-xs font-medium sm:gap-4">
         <ThemeToggle />
 
         {TABS_WITH_FACTORY.has(activeTab) && (
@@ -86,7 +100,7 @@ export default function Header({ activeTab, factory, factories, onFactoryChange 
         )}
 
         {user ? (
-          <div className="flex items-center gap-3 pl-2">
+          <div className="flex items-center gap-2 sm:gap-3 sm:pl-2">
             <div
               className="w-8 h-8 rounded-full flex items-center justify-center font-bold shadow-sm border text-xs"
               style={{
@@ -97,7 +111,7 @@ export default function Header({ activeTab, factory, factories, onFactoryChange 
             >
               {getInitials(user.email ?? '')}
             </div>
-            <div className="flex flex-col">
+            <div className="hidden flex-col lg:flex">
               <span
                 className="text-[13px] leading-tight font-bold flex items-center gap-2"
                 style={{ color: 'var(--color-text-primary)' }}

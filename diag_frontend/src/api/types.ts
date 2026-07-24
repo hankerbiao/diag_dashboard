@@ -29,6 +29,33 @@ export interface FailedLogFile {
   extracted_content: string;
   matched_lines: number;
   total_lines: number;
+  ai_extracted: boolean;
+  processing_mode:
+    | 'single'
+    | 'chunked'
+    | 'prefiltered_chunked'
+    | 'prefiltered_empty'
+    | 'regex_fallback'
+    | string;
+  segment_count: number;
+  successful_segments: number;
+  failed_segments: number;
+  extraction_duration_ms: number;
+  model_used: string;
+  prompt_model?: string;
+  preprocessing_applied?: boolean;
+  preprocessing_original_lines?: number;
+  preprocessing_kept_lines?: number;
+  preprocessing_removed_lines?: number;
+  preprocessing_retention_ratio?: number;
+  preprocessing_level_lines?: number;
+  preprocessing_anomaly_entries?: number;
+  source_size?: number;
+  downloaded_size?: number;
+  source_line_count?: number;
+  source_truncated?: boolean;
+  truncation_strategy?: string;
+  retry_count?: number;
 }
 
 export interface SnHistoryItem {
@@ -120,6 +147,7 @@ export interface LogExtractionPromptsResponse {
 }
 
 export type DiagnosisRating = 'solved' | 'partially' | 'unsolved';
+export type FeedbackStatus = 'pending' | 'processing' | 'resolved' | 'ignored';
 
 export interface DiagnosisFeedback {
   id: string;
@@ -129,7 +157,35 @@ export interface DiagnosisFeedback {
   rating: DiagnosisRating;
   comment?: string;
   diagnosis_context?: string;
+  status: FeedbackStatus;
+  resolution_note?: string;
+  knowledge_document_ids?: string[];
+  knowledge_title?: string;
+  knowledge_uploaded_at?: string;
+  submitter?: {
+    id: string;
+    email: string;
+  };
   created_at: string;
+  updated_at?: string;
+}
+
+export interface FeedbackSummary {
+  total: number;
+  solved: number;
+  partially: number;
+  unsolved: number;
+  pending: number;
+  processing: number;
+  solved_rate: number;
+}
+
+export interface FeedbackListResponse {
+  items: DiagnosisFeedback[];
+  total: number;
+  page: number;
+  limit: number;
+  summary: FeedbackSummary;
 }
 
 export interface DiagnosisFeedbackParams {

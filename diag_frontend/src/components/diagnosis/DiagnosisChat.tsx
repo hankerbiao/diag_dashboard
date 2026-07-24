@@ -33,11 +33,11 @@ export default function DiagnosisChat({ messages, loading, onSend }: DiagnosisCh
 
   return (
     <div
-      className="w-[380px] shrink-0 border-l flex flex-col min-h-0"
+      className="flex h-[220px] min-h-0 w-full shrink-0 flex-col border-t sm:h-[260px] xl:h-auto xl:w-[380px] xl:border-l xl:border-t-0"
       style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}
     >
       <div
-        className="px-4 py-3 border-b shrink-0 text-[12px] font-bold uppercase tracking-widest"
+        className="shrink-0 border-b px-4 py-3 text-[12px] font-bold"
         style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }}
       >
         AI 诊断对话
@@ -97,9 +97,10 @@ export default function DiagnosisChat({ messages, loading, onSend }: DiagnosisCh
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="追问诊断细节..."
+          placeholder="追问诊断细节"
           disabled={loading}
-          className="flex-1 h-9 rounded-full px-4 text-[13px] outline-none border disabled:opacity-40"
+          aria-label="追问诊断细节"
+          className="h-10 flex-1 rounded-md border px-3 text-[13px] outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-40"
           style={{
             backgroundColor: 'var(--color-bg-primary)',
             borderColor: 'var(--color-border)',
@@ -109,8 +110,10 @@ export default function DiagnosisChat({ messages, loading, onSend }: DiagnosisCh
         <button
           onClick={handleSend}
           disabled={loading || !input.trim()}
-          className="w-9 h-9 text-white rounded-full flex items-center justify-center shrink-0 transition-all hover:scale-105 active:scale-95 disabled:opacity-40 disabled:hover:scale-100"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-blue-600 text-white transition hover:bg-blue-700 active:scale-[0.98] disabled:opacity-40"
           style={{ backgroundColor: 'var(--color-accent)' }}
+          aria-label="发送追问"
+          title="发送"
         >
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ChevronUp className="w-5 h-5" />}
         </button>

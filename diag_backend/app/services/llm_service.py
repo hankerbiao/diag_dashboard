@@ -1,7 +1,10 @@
-from typing import Awaitable, Callable, Literal, Optional
 import json
+import logging
+import math
 import re
+import time
 from string import Formatter
+from typing import Awaitable, Callable, Literal, Optional
 
 import httpx
 from openai import AsyncOpenAI, BadRequestError
@@ -10,6 +13,8 @@ from .log_extractor import (
     LOG_EXTRACTION_SYSTEM_PROMPT,
     LOG_EXTRACTION_USER_PROMPT_TPL,
 )
+
+logger = logging.getLogger(__name__)
 
 DEVICE_INFO_TPL = """## 设备信息
 - 设备 SN: {sn}
@@ -45,20 +50,289 @@ def _build_diagnosis_prompt(error_log: dict, knowledge_context: str, extra_hint:
 class LLMService:
     """LLM 服务封装 — 支持数据库配置热加载"""
 
-    # 模型上下文窗口配置（可通过数据库覆盖）
-    DEFAULT_MODEL_CONTEXT_LEN = 1000000
+    # 未知 OpenAI 兼容模型使用保守窗口；已知模型根据 model ID 自动识别。
+    DEFAULT_MODEL_CONTEXT_LEN = 32768
+    DEFAULT_OUTPUT_TOKEN_LIMITS = {"answer": 8192, "extraction": 4096}
+    MIN_OUTPUT_TOKENS = 512
+    MODEL_CONTEXT_PATTERNS = (
+        (r"(?:^|[/_-])gpt-5(?:[._-]|$)", 400000),
+        (r"(?:^|[/_-])gpt-4\.1(?:[._-]|$)", 1047576),
+        (r"(?:^|[/_-])gpt-4o(?:[._-]|$)", 128000),
+        (r"(?:^|[/_-])gpt-4-turbo(?:[._-]|$)", 128000),
+        (r"(?:^|[/_-])gpt-4-32k(?:[._-]|$)", 32768),
+        (r"(?:^|[/_-])gpt-4(?:[._-]|$)", 8192),
+        (r"(?:^|[/_-])(?:o1|o3|o4)(?:[._-]|$)", 200000),
+        (r"(?:^|[/_-])gemini-(?:1\.5|2\.|2-|2\.5|3\.)", 1048576),
+        (r"(?:^|[/_-])deepseek(?:[._-]|$)", 65536),
+        (r"(?:^|[/_-])qwen-long(?:[._-]|$)", 1000000),
+        (r"(?:^|[/_-])qwen(?:2\.5|3)?(?:[._-]|$)", 131072),
+        (r"(?:^|[/_-])(?:llama-?3|mistral)(?:[._-]|$)", 131072),
+        (r"(?:^|[/_-])claude(?:[._-]|$)", 200000),
+    )
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
-        """粗略估算 token 数量：中文约 1.5 token/字，英文约 0.25 token/字，混合取 2 字符/token"""
+        """保守估算 token 数量，兼顾中文和高熵日志内容。"""
         if not text:
             return 0
         total_chars = len(text)
-        # 统计中文字符数
         chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
-        # 中文字符约 1.5 token，非中文字符约 0.25 token
         non_chinese = total_chars - chinese_chars
-        return int(chinese_chars * 1.5 + non_chinese * 0.25)
+        return max(1, math.ceil(chinese_chars * 1.5 + non_chinese * 0.5))
+
+    @classmethod
+    def _estimate_messages_tokens(cls, messages: list[dict]) -> int:
+        """估算 chat messages 的 token 数，包含角色和消息封装开销。"""
+        total = 3
+        for message in messages:
+            total += 4
+            total += cls._estimate_tokens(str(message.get("role", "")))
+            content = message.get("content", "")
+            if isinstance(content, str):
+                total += cls._estimate_tokens(content)
+            else:
+                total += cls._estimate_tokens(json.dumps(content, ensure_ascii=False, default=str))
+            if message.get("name"):
+                total += cls._estimate_tokens(str(message["name"]))
+        return total
+
+    @classmethod
+    def _infer_model_context_len(cls, model: str) -> int:
+        normalized = (model or "").strip().lower()
+        for pattern, context_len in cls.MODEL_CONTEXT_PATTERNS:
+            if re.search(pattern, normalized):
+                return context_len
+        return cls.DEFAULT_MODEL_CONTEXT_LEN
+
+    def _context_cache_key(self, cfg: dict, model: str) -> str:
+        return f"{cfg.get('base_url', '')}|{model}".lower()
+
+    def _resolve_context_len(self, cfg: dict, model: str) -> int:
+        configured = cfg.get("model_context_len")
+        if isinstance(configured, (int, float)) and configured > 0:
+            context_len = int(configured)
+        else:
+            context_len = self._infer_model_context_len(model)
+        learned = self._learned_context_lengths.get(self._context_cache_key(cfg, model))
+        return min(context_len, learned) if learned else context_len
+
+    def _resolve_output_limit(
+        self,
+        cfg: dict,
+        model: str,
+        client: Literal["answer", "extraction"],
+    ) -> int:
+        output_limit = self.DEFAULT_OUTPUT_TOKEN_LIMITS[client]
+        configured_cap = cfg.get("max_tokens")
+        if isinstance(configured_cap, (int, float)) and configured_cap > 0:
+            output_limit = min(output_limit, int(configured_cap))
+        learned = self._learned_output_limits.get(self._context_cache_key(cfg, model))
+        return min(output_limit, learned) if learned else output_limit
+
+    def get_context_window(self, client: Literal["answer", "extraction"] = "answer") -> int:
+        """返回当前模型的后端推断上下文窗口，供日志分段等上游流程复用。"""
+        cfg = self._config.get(client, {})
+        return self._resolve_context_len(cfg, str(cfg.get("model", "")))
+
+    @classmethod
+    def _take_prefix_by_tokens(cls, text: str, token_budget: int) -> str:
+        unit_budget = max(0, token_budget) * 2
+        units = 0
+        for index, char in enumerate(text):
+            units += 3 if '\u4e00' <= char <= '\u9fff' else 1
+            if units > unit_budget:
+                return text[:index]
+        return text
+
+    @classmethod
+    def _take_suffix_by_tokens(cls, text: str, token_budget: int) -> str:
+        unit_budget = max(0, token_budget) * 2
+        units = 0
+        for index in range(len(text) - 1, -1, -1):
+            char = text[index]
+            units += 3 if '\u4e00' <= char <= '\u9fff' else 1
+            if units > unit_budget:
+                return text[index + 1:]
+        return text
+
+    @classmethod
+    def _truncate_to_token_budget(cls, text: str, token_budget: int) -> str:
+        """按 token 预算保留文本首尾，日志结论和尾部错误都不会被完全丢弃。"""
+        if token_budget <= 0:
+            return ""
+        if cls._estimate_tokens(text) <= token_budget:
+            return text
+        marker = "\n\n[注：中间内容过长，已按模型窗口自动裁剪]\n\n"
+        marker_tokens = cls._estimate_tokens(marker)
+        if token_budget <= marker_tokens + 8:
+            return cls._take_prefix_by_tokens(text, max(1, token_budget))
+        remaining = token_budget - marker_tokens
+        head = cls._take_prefix_by_tokens(text, int(remaining * 0.6))
+        tail = cls._take_suffix_by_tokens(text, remaining - cls._estimate_tokens(head))
+        return head + marker + tail
+
+    def _fit_messages_to_budget(self, messages: list[dict], input_budget: int) -> list[dict]:
+        """按角色优先级分配输入预算，并裁剪超长字符串消息。"""
+        prepared = [dict(message) for message in messages]
+        if self._estimate_messages_tokens(prepared) <= input_budget:
+            return prepared
+
+        string_indexes = [i for i, message in enumerate(prepared) if isinstance(message.get("content", ""), str)]
+        if not string_indexes:
+            raise RuntimeError("LLM 输入超过模型窗口，且消息内容无法自动裁剪")
+
+        overhead = self._estimate_messages_tokens([
+            {**message, "content": "" if isinstance(message.get("content", ""), str) else message.get("content")}
+            for message in prepared
+        ])
+        content_budget = max(0, input_budget - overhead)
+        current = {i: self._estimate_tokens(prepared[i].get("content", "")) for i in string_indexes}
+        allocation = {i: 0 for i in string_indexes}
+        remaining = content_budget
+        for i in string_indexes:
+            seed = min(32, current[i], remaining)
+            allocation[i] = seed
+            remaining -= seed
+
+        while remaining > 0:
+            pending = [i for i in string_indexes if allocation[i] < current[i]]
+            if not pending:
+                break
+            weights = {
+                i: (4 if i == string_indexes[-1] else 2 if prepared[i].get("role") == "user" else 1)
+                for i in pending
+            }
+            total_weight = sum(weights.values())
+            progressed = 0
+            for i in pending:
+                share = max(1, remaining * weights[i] // total_weight)
+                added = min(share, current[i] - allocation[i], remaining - progressed)
+                allocation[i] += added
+                progressed += added
+                if progressed >= remaining:
+                    break
+            if progressed <= 0:
+                break
+            remaining -= progressed
+
+        for i in string_indexes:
+            prepared[i]["content"] = self._truncate_to_token_budget(
+                prepared[i].get("content", ""), allocation[i]
+            )
+
+        # 估算误差和截断标记也计入预算；最后从最大消息中收紧。
+        for _ in range(3):
+            excess = self._estimate_messages_tokens(prepared) - input_budget
+            if excess <= 0:
+                break
+            largest = max(string_indexes, key=lambda i: self._estimate_tokens(prepared[i].get("content", "")))
+            target = max(8, self._estimate_tokens(prepared[largest].get("content", "")) - excess - 8)
+            prepared[largest]["content"] = self._truncate_to_token_budget(
+                prepared[largest].get("content", ""), target
+            )
+        if self._estimate_messages_tokens(prepared) > input_budget:
+            raise RuntimeError("LLM 消息封装开销已超过模型上下文窗口")
+        return prepared
+
+    def _prepare_request(
+        self,
+        messages: list[dict],
+        cfg: dict,
+        model: str,
+        client: Literal["answer", "extraction"],
+    ) -> tuple[list[dict], int, int, int]:
+        """为单次请求计算上下文、输入裁剪和动态输出预算。"""
+        context_len = self._resolve_context_len(cfg, model)
+        reserve = max(512, min(8192, context_len // 10))
+        minimum_output = min(self.MIN_OUTPUT_TOKENS, max(128, context_len // 16))
+        input_budget = max(256, context_len - reserve - minimum_output)
+        prepared = self._fit_messages_to_budget(messages, input_budget)
+        input_tokens = self._estimate_messages_tokens(prepared)
+
+        desired_output = self._resolve_output_limit(cfg, model, client)
+        available_output = context_len - reserve - input_tokens
+        max_output = max(128, min(desired_output, available_output))
+        return prepared, max_output, context_len, input_tokens
+
+    @staticmethod
+    def _context_limit_from_error(detail: str) -> Optional[int]:
+        patterns = (
+            r"maximum context length is\s*([\d,]+)",
+            r"context length(?: is| of)?\s*([\d,]+)",
+            r"context window(?: is| of)?\s*([\d,]+)",
+            r"max(?:imum)?(?: sequence)? length(?: is| of)?\s*([\d,]+)",
+            r"maximum model length(?: is| of)?\s*([\d,]+)",
+            r"上下文(?:窗口|长度)[^\d]{0,20}([\d,]+)",
+        )
+        lowered = detail.lower()
+        for pattern in patterns:
+            match = re.search(pattern, lowered)
+            if match:
+                return int(match.group(1).replace(",", ""))
+        return None
+
+    @staticmethod
+    def _is_context_limit_error(detail: str) -> bool:
+        lowered = detail.lower()
+        return any(
+            marker in lowered
+            for marker in (
+                "context length",
+                "context window",
+                "maximum context",
+                "max sequence length",
+                "maximum model length",
+                "too many tokens",
+                "token limit",
+                "maximum number of tokens",
+                "reduce the length",
+                "上下文长度",
+                "上下文窗口",
+            )
+        )
+
+    @staticmethod
+    def _output_limit_from_error(detail: str) -> Optional[int]:
+        patterns = (
+            r"max_tokens.*?less than or equal to\s*([\d,]+)",
+            r"max_tokens.*?<=\s*([\d,]+)",
+            r"max_tokens.*?(?:at most|cannot exceed|limit(?: is| of)?)\s*([\d,]+)",
+            r"maximum (?:number of )?(?:output|completion) tokens(?: is|:)?\s*([\d,]+)",
+            r"(?:output|completion) token limit(?: is|:)?\s*([\d,]+)",
+            r"supports (?:up to|at most)\s*([\d,]+)\s*(?:output|completion) tokens",
+            r"最大输出[^\d]{0,20}([\d,]+)",
+        )
+        lowered = detail.lower()
+        for pattern in patterns:
+            match = re.search(pattern, lowered)
+            if match:
+                return int(match.group(1).replace(",", ""))
+        return None
+
+    def _learn_context_limit(self, cfg: dict, model: str, detail: str, attempted: int) -> int:
+        detected = self._context_limit_from_error(detail)
+        learned = detected if detected and detected < attempted else max(2048, int(attempted * 0.75))
+        key = self._context_cache_key(cfg, model)
+        previous = self._learned_context_lengths.get(key)
+        self._learned_context_lengths[key] = min(previous, learned) if previous else learned
+        logger.warning(
+            "LLM 上下文窗口已自动收紧",
+            extra={"model": model, "attempted_context": attempted, "learned_context": learned},
+        )
+        return learned
+
+    def _learn_output_limit(self, cfg: dict, model: str, detail: str, attempted: int) -> Optional[int]:
+        detected = self._output_limit_from_error(detail)
+        if not detected or detected >= attempted:
+            return None
+        key = self._context_cache_key(cfg, model)
+        previous = self._learned_output_limits.get(key)
+        self._learned_output_limits[key] = min(previous, detected) if previous else detected
+        logger.warning(
+            "LLM 输出 token 上限已自动收紧",
+            extra={"model": model, "attempted_output": attempted, "learned_output": detected},
+        )
+        return detected
 
     @staticmethod
     def _truncate_text(text: str, max_chars: int) -> str:
@@ -79,13 +353,14 @@ class LLMService:
         """构建诊断 prompt 并确保不超过模型上下文限制"""
         system_prompt = "硬件诊断工程师"
         system_tokens = self._estimate_tokens(system_prompt)
-        # 模型上下文长度，加上 10000 的安全余量
-        context_len = self._config["answer"].get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN)
-        max_output = self._config["answer"].get("max_tokens", 28000) or 28000
-        # 安全限制：max_output 不超过上下文窗口的 70%，且至少留 4096 给 prompt
-        safe_max_output = min(max_output, int(context_len * 0.7), context_len - 4096)
-        safe_max_output = max(safe_max_output, 1024)
-        available_tokens = context_len - safe_max_output - system_tokens - 10000
+        # prompt 构建阶段使用保守预算；最终 messages 会在请求前再次精确收口。
+        cfg = self._config.get("answer", {})
+        context_len = self._resolve_context_len(cfg, str(cfg.get("model", "")))
+        safe_max_output = min(
+            self.DEFAULT_OUTPUT_TOKEN_LIMITS["answer"], max(1024, context_len // 4)
+        )
+        reserve = max(512, min(8192, context_len // 10))
+        available_tokens = max(512, context_len - safe_max_output - system_tokens - reserve)
         # 转换为字符预算（保守估计 2 字符/token）
         char_budget = int(available_tokens * 2.0)
 
@@ -136,15 +411,15 @@ class LLMService:
         if truncated_kb:
             sections.append(truncated_kb)
 
-        # 设备信息 + 完整日志 + 维修 + 案例（允许截断）
+        # 设备信息 + 异常日志 + 维修 + 案例（允许截断）
         content_parts = [f"""## 二、设备背景信息
 - 设备 SN: {sn}
 - 型号: {device_info.get('model', '未知')}
 - 批次: {device_info.get('batch', '未知')}
 - 厂区: {device_info.get('factory', '未知')}
 
-## 三、全部测试日志（含通过项，用于全面了解设备状态）
-{chr(10).join([f"- [{tl.get('test_time')}] {tl.get('test_item')}: {tl.get('fail_details', '通过')}" for tl in test_logs[:10]])}
+## 三、异常测试日志
+{chr(10).join([f"- [{tl.get('test_time')}] {tl.get('test_item')}: {tl.get('fail_details', '异常')}" for tl in test_logs[:10]]) if test_logs else "无异常测试日志"}
 
 ## 四、历史维修记录
 {chr(10).join([f"- [{r.get('date')}] 更换 {r.get('component')}：{r.get('action')}" for r in maintenance[:5]]) if maintenance else "无历史维修记录"}
@@ -167,7 +442,9 @@ class LLMService:
                 extra={"estimated_tokens": estimated_total, "limit": context_len - safe_max_output, "sn": sn},
             )
             # 大幅减少内容
-            safe_budget = int((context_len - safe_max_output - system_tokens - 10000) * 1.5)
+            safe_budget = max(
+                256, int((context_len - safe_max_output - system_tokens - reserve) * 1.5)
+            )
             sections[-2] = self._truncate_text(sections[-2], safe_budget // 3)
             sections[-3] = self._truncate_text(sections[-3], safe_budget // 3)
             final_prompt = "\n\n".join(sections)
@@ -178,6 +455,8 @@ class LLMService:
         self._answer_client: Optional[AsyncOpenAI] = None
         self._extraction_client: Optional[AsyncOpenAI] = None
         self._config: dict = {"answer": {}, "extraction": {}}
+        self._learned_context_lengths: dict[str, int] = {}
+        self._learned_output_limits: dict[str, int] = {}
         self._loaded = False
 
     # openai_client 向后兼容别名（指向回答模型客户端）
@@ -209,10 +488,10 @@ class LLMService:
             "base_url": config.get("base_url", ""),
             "model": config.get("model", ""),
             "temperature": config.get("temperature", 0.0),
-            "max_tokens": config.get("max_tokens", 0),
+            "max_tokens": config.get("max_tokens", 0),  # 仅作为自动输出预算的可选上限
             "chat_template_kwargs": config.get("chat_template_kwargs", {"enable_thinking": False}),
             "timeout": config.get("timeout", 0),
-            "model_context_len": config.get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN),
+            "model_context_len": config.get("model_context_len", 0),
         }
         extraction = {
             "api_key": config.get("extraction_api_key") or answer["api_key"],
@@ -251,6 +530,56 @@ class LLMService:
         """根据当前 _config 重建回答/提取两个 AsyncOpenAI 客户端"""
         self._answer_client = self._build_client(self._config["answer"])
         self._extraction_client = self._build_client(self._config["extraction"])
+
+    async def test_connection(self, cfg: dict) -> dict:
+        """使用临时客户端发送最小请求，不修改当前运行配置。"""
+        api_key = str(cfg.get("api_key") or "").strip()
+        base_url = str(cfg.get("base_url") or "").strip()
+        model = str(cfg.get("model") or "").strip()
+        if not api_key:
+            return {"success": False, "model": model, "base_url": base_url, "error": "API Key 未配置"}
+        if not base_url:
+            return {"success": False, "model": model, "base_url": base_url, "error": "Base URL 未配置"}
+        if not model:
+            return {"success": False, "model": model, "base_url": base_url, "error": "Model ID 未配置"}
+
+        client = self._build_client({**cfg, "timeout": min(int(cfg.get("timeout") or 30), 120)})
+        started = time.perf_counter()
+        try:
+            try:
+                completion = await client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": "Reply with OK."}],
+                    max_tokens=8,
+                )
+            except BadRequestError as error:
+                detail = str(error).lower()
+                if "max_tokens" not in detail:
+                    raise
+                completion = await client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": "Reply with OK."}],
+                    max_completion_tokens=8,
+                )
+            if not completion.choices:
+                raise RuntimeError("模型返回空 choices")
+            return {
+                "success": True,
+                "model": model,
+                "base_url": base_url,
+                "latency_ms": round((time.perf_counter() - started) * 1000),
+            }
+        except Exception as error:  # noqa: BLE001
+            detail = str(error).replace(api_key, "***")[:500]
+            return {
+                "success": False,
+                "model": model,
+                "base_url": base_url,
+                "latency_ms": round((time.perf_counter() - started) * 1000),
+                "error": detail or type(error).__name__,
+            }
+        finally:
+            await client.close()
 
     async def reload_config(self):
         """从数据库重新加载配置（热加载）"""
@@ -315,23 +644,58 @@ class LLMService:
         if chat_template_kwargs:
             extra_kwargs["extra_body"] = chat_template_kwargs
 
-        # 自动限制 max_tokens：不超过模型上下文窗口的 70%，且至少保留 4096 token 给 prompt
-        context_len = cfg.get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN)
-        max_output = cfg.get("max_tokens", 28000) or 28000
-        safe_max_output = min(max_output, int(context_len * 0.7), context_len - 4096)
-        safe_max_output = max(safe_max_output, 1024)  # 至少 1024
+        selected_model = model or cfg["model"]
+        for attempt in range(3):
+            prepared, max_output, context_len, input_tokens = self._prepare_request(
+                messages, cfg, selected_model, client
+            )
+            logger.info(
+                "LLM 请求 token 预算",
+                extra={
+                    "model": selected_model,
+                    "client": client,
+                    "context_tokens": context_len,
+                    "input_tokens": input_tokens,
+                    "max_output_tokens": max_output,
+                },
+            )
+            try:
+                completion = await client_obj.chat.completions.create(
+                    model=selected_model,
+                    messages=prepared,
+                    temperature=temperature if temperature is not None else cfg["temperature"],
+                    max_tokens=max_output,
+                    **extra_kwargs,
+                )
+                if not completion.choices:
+                    raise RuntimeError("LLM 返回空 choices")
+                choice = completion.choices[0]
+                content = self._message_content_text(choice.message)
+                if content:
+                    return content
 
-        try:
-            return (await client_obj.chat.completions.create(
-                model=model or cfg["model"],
-                messages=messages,
-                temperature=temperature if temperature is not None else cfg["temperature"],
-                max_tokens=safe_max_output,
-                **extra_kwargs,
-            )).choices[0].message.content
-        except BadRequestError as e:
-            detail = e.body.get("error", {}).get("message", str(e)) if isinstance(e.body, dict) else str(e)
-            raise RuntimeError(f"LLM 请求被拒绝: {detail}") from e
+                reasoning = self._message_reasoning_text(choice.message)
+                if client == "extraction" and "errors" in reasoning and "{" in reasoning:
+                    logger.warning(
+                        "提取模型 content 为空，改用 reasoning_content 中的结构化结果",
+                        extra={"model": selected_model, "finish_reason": choice.finish_reason},
+                    )
+                    return reasoning
+                raise RuntimeError(
+                    f"LLM 返回空内容（model={selected_model}, "
+                    f"finish_reason={choice.finish_reason or 'unknown'}）"
+                )
+            except BadRequestError as e:
+                detail = e.body.get("error", {}).get("message", str(e)) if isinstance(e.body, dict) else str(e)
+                if attempt < 2 and self._learn_output_limit(
+                    cfg, selected_model, detail, max_output
+                ):
+                    continue
+                if attempt < 2 and self._is_context_limit_error(detail):
+                    self._learn_context_limit(cfg, selected_model, detail, context_len)
+                    continue
+                raise RuntimeError(f"LLM 请求被拒绝: {detail}") from e
+        raise RuntimeError("LLM 请求超过模型上下文窗口")
 
     async def chat_completion_stream(
         self, messages: list[dict], token_cb: Callable[[str], Awaitable[None]],
@@ -351,23 +715,43 @@ class LLMService:
         if chat_template_kwargs:
             extra_kwargs["extra_body"] = chat_template_kwargs
 
-        # 自动限制 max_tokens：不超过模型上下文窗口的 70%，且至少保留 4096 token 给 prompt
-        context_len = cfg.get("model_context_len", self.DEFAULT_MODEL_CONTEXT_LEN)
-        max_output = cfg.get("max_tokens", 28000) or 28000
-        safe_max_output = min(max_output, int(context_len * 0.7), context_len - 4096)
-        safe_max_output = max(safe_max_output, 1024)
-
-        try:
-            stream = await client_obj.chat.completions.create(
-                model=model or cfg["model"],
-                messages=messages,
-                temperature=temperature if temperature is not None else cfg["temperature"],
-                max_tokens=safe_max_output,
-                **extra_kwargs,
+        selected_model = model or cfg["model"]
+        stream = None
+        for attempt in range(3):
+            prepared, max_output, context_len, input_tokens = self._prepare_request(
+                messages, cfg, selected_model, client
             )
-        except BadRequestError as e:
-            detail = e.body.get("error", {}).get("message", str(e)) if isinstance(e.body, dict) else str(e)
-            raise RuntimeError(f"LLM 请求被拒绝: {detail}") from e
+            logger.info(
+                "LLM 流式请求 token 预算",
+                extra={
+                    "model": selected_model,
+                    "client": client,
+                    "context_tokens": context_len,
+                    "input_tokens": input_tokens,
+                    "max_output_tokens": max_output,
+                },
+            )
+            try:
+                stream = await client_obj.chat.completions.create(
+                    model=selected_model,
+                    messages=prepared,
+                    temperature=temperature if temperature is not None else cfg["temperature"],
+                    max_tokens=max_output,
+                    **extra_kwargs,
+                )
+                break
+            except BadRequestError as e:
+                detail = e.body.get("error", {}).get("message", str(e)) if isinstance(e.body, dict) else str(e)
+                if attempt < 2 and self._learn_output_limit(
+                    cfg, selected_model, detail, max_output
+                ):
+                    continue
+                if attempt < 2 and self._is_context_limit_error(detail):
+                    self._learn_context_limit(cfg, selected_model, detail, context_len)
+                    continue
+                raise RuntimeError(f"LLM 请求被拒绝: {detail}") from e
+        if stream is None:
+            raise RuntimeError("LLM 请求超过模型上下文窗口")
         chunks = []
         async for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None
@@ -377,7 +761,36 @@ class LLMService:
         return "".join(chunks)
 
     @staticmethod
+    def _message_content_text(message: object) -> str:
+        """兼容 OpenAI 文本字符串与 content parts 响应。"""
+        content = getattr(message, "content", None)
+        if isinstance(content, str):
+            return content.strip()
+        if not isinstance(content, list):
+            return ""
+        parts: list[str] = []
+        for part in content:
+            value = part.get("text") if isinstance(part, dict) else getattr(part, "text", None)
+            if isinstance(value, str) and value:
+                parts.append(value)
+        return "\n".join(parts).strip()
+
+    @staticmethod
+    def _message_reasoning_text(message: object) -> str:
+        reasoning = getattr(message, "reasoning_content", None)
+        if isinstance(reasoning, str):
+            return reasoning.strip()
+        model_extra = getattr(message, "model_extra", None)
+        if isinstance(model_extra, dict):
+            reasoning = model_extra.get("reasoning_content")
+            if isinstance(reasoning, str):
+                return reasoning.strip()
+        return ""
+
+    @staticmethod
     def _extract_json(text: str) -> str:
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("LLM 返回内容为空，无法解析 JSON")
         match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
         return match.group(1).strip() if match else text.strip()
 
@@ -537,6 +950,11 @@ class LLMService:
             segment_count=stats.get("segment_count", 1),
             log_text=raw_log_text,
         )
+        if stats.get("source_line_prefixes"):
+            user_prompt += (
+                "\n\n行号说明：日志行前缀 [L123] 表示该行在原始完整日志中的第 123 行。"
+                "返回 line_number 时必须使用此前缀中的原始行号，不要使用当前块内相对行号。"
+            )
 
         try:
             response = await self.chat_completion(

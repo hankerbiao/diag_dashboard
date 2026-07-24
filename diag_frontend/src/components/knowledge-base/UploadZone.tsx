@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
-import { UploadCloud, Plus, Share2, X, FileText } from 'lucide-react';
+import { BookPlus, Download, FileText, Plus, UploadCloud, X } from 'lucide-react';
 import { knowledgeBaseApi } from '../../api/fastapi';
+import QuickKnowledgePanel from './QuickKnowledgePanel';
 
 interface UploadZoneProps {
   onUploaded: () => void;
@@ -18,6 +19,7 @@ export default function UploadZone({ onUploaded }: UploadZoneProps) {
   const [uploading, setUploading] = useState(false);
   const [title, setTitle] = useState('');
   const [tags, setTags] = useState('');
+  const [showQuickEntry, setShowQuickEntry] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const addFiles = useCallback((newFiles: FileList | File[]) => {
@@ -72,14 +74,35 @@ export default function UploadZone({ onUploaded }: UploadZoneProps) {
           支持 PDF, DOCX, TXT, CSV, Markdown 等常见文本及表格格式类型。<br/>
           引擎将自动完成排版解析、图文混排抽取与语义分块 (Chunking)。
         </p>
-        <button
-          onClick={handleOpenPicker}
-          className="px-6 py-2.5 text-white rounded-lg text-sm font-bold shadow-md transition-all flex items-center gap-2 active:scale-95 border"
-          style={{ backgroundColor: 'var(--color-accent)', boxShadow: '0 4px 12px rgba(59,130,246,0.3)', borderColor: 'var(--color-accent)' }}
-        >
-          <Plus className="w-4 h-4" />
-          选择本地文件上传
-        </button>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={handleOpenPicker}
+            className="px-6 py-2.5 text-white rounded-lg text-sm font-bold shadow-md transition-all flex items-center gap-2 active:scale-95 border"
+            style={{ backgroundColor: 'var(--color-accent)', boxShadow: '0 4px 12px rgba(59,130,246,0.3)', borderColor: 'var(--color-accent)' }}
+          >
+            <Plus className="w-4 h-4" />
+            选择本地文件上传
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowQuickEntry(true)}
+            className="flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-bold transition-colors hover:bg-black/[0.03]"
+            style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)', backgroundColor: 'var(--color-bg-primary)' }}
+          >
+            <BookPlus className="h-4 w-4" />
+            快速录入知识
+          </button>
+          <a
+            href={`${import.meta.env.BASE_URL}templates/weaveeye-rag-knowledge-template.md`}
+            download="WeaveEye知识库文档模板.md"
+            className="flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-bold transition-colors hover:bg-black/[0.03]"
+            style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)', backgroundColor: 'var(--color-bg-primary)' }}
+          >
+            <Download className="h-4 w-4" />
+            下载知识模板
+          </a>
+        </div>
         <p className="text-[11px] mt-3" style={{ color: 'var(--color-text-muted)' }}>上传后自动归入默认知识库，由 AI 引擎进行切片与向量化处理</p>
         <input
           ref={inputRef}
@@ -165,6 +188,12 @@ export default function UploadZone({ onUploaded }: UploadZoneProps) {
           </div>
         </div>
       )}
+
+      <QuickKnowledgePanel
+        open={showQuickEntry}
+        onClose={() => setShowQuickEntry(false)}
+        onCreated={onUploaded}
+      />
     </div>
   );
 }

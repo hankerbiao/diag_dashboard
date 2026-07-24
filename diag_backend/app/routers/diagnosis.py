@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from ..core.utils import (
     utc_now_iso,
     is_sims_record_failed,
@@ -8,7 +9,7 @@ from ..core.utils import (
     parse_object_id,
     build_log_download_url,
 )
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Literal, Optional
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -24,6 +25,8 @@ from ..models.request import (
     AppendChatRequest,
     ErrorLogAnalyzeContext,
     DiagnosisFeedbackRequest,
+    DiagnosisFeedbackStatusRequest,
+    DiagnosisFeedbackKnowledgeRequest,
 )
 from ..models.api import ApiResponse
 from ..models.diagnosis import (
@@ -35,6 +38,7 @@ from ..models.diagnosis import (
 )
 from ..services.llm_service import llm_service
 from ..services.knowledge_graph import knowledge_graph
+from ..services.log_processing.prompt_registry import PromptRegistry
 from ..services.mes_direct_service import MESDirectService, MESRequestError
 from ..services import ragflow_service
 
@@ -50,14 +54,89 @@ MAX_PROMPT_TOKENS = 28_000
 
 router = APIRouter(prefix="/diagnosis", tags=["诊断"])
 
+ProgressStatus = Literal["running", "skipped"]
+ProgressMetadata = dict[str, object]
+ProgressCallback = Callable[
+    [str, str, ProgressStatus, Optional[ProgressMetadata]], Awaitable[None]
+]
+
+
+class _BoundedByteCollector:
+    """以固定内存保留下载内容的头部和尾部，并统计完整源大小。"""
+
+    def __init__(self, limit: int = MAX_LOG_BYTES):
+        self.limit = max(2, limit)
+        self.head_limit = self.limit // 2
+        self.tail_limit = self.limit - self.head_limit
+        self.head = bytearray()
+        self.tail = bytearray()
+        self.source_size = 0
+        self.source_line_count = 0
+        self.last_byte: Optional[int] = None
+
+    def feed(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        self.source_size += len(chunk)
+        self.source_line_count += chunk.count(b"\n")
+        self.last_byte = chunk[-1]
+        head_remaining = self.head_limit - len(self.head)
+        if head_remaining > 0:
+            self.head.extend(chunk[:head_remaining])
+            chunk = chunk[head_remaining:]
+        if chunk:
+            self.tail.extend(chunk)
+            if len(self.tail) > self.tail_limit:
+                del self.tail[: len(self.tail) - self.tail_limit]
+
+    def result(self) -> tuple[bytes, dict]:
+        truncated = self.source_size > self.limit
+        if truncated:
+            raw = bytes(self.head) + b"\n[... download middle omitted ...]\n" + bytes(self.tail)
+        else:
+            raw = bytes(self.head + self.tail)
+        return raw, {
+            "source_size": self.source_size,
+            "downloaded_size": min(self.source_size, self.limit),
+            "source_line_count": self.source_line_count
+            + (1 if self.source_size and self.last_byte != ord("\n") else 0),
+            "source_truncated": truncated,
+            "truncation_strategy": "head_tail" if truncated else "none",
+        }
+
+
+def _unpack_full_download(result: tuple) -> tuple[str, dict, Optional[str]]:
+    """兼容旧测试/调用方的 (content, error) 返回形态。"""
+    if len(result) == 3:
+        content, metadata, error = result
+        return content, metadata, error
+    content, error = result
+    size = len(str(content).encode("utf-8", errors="replace"))
+    return content, {
+        "source_size": size,
+        "downloaded_size": size,
+        "source_line_count": len(str(content).splitlines()),
+        "source_truncated": False,
+        "truncation_strategy": "none",
+    }, error
+
 
 # ── 通用诊断 ──
+
+
+def _machine_model_from_server(server: object) -> str:
+    """从 MES 服务器信息中取实际机型，兼容 productModels 回退。"""
+    model = str(getattr(server, "model", "") or "").strip()
+    if model:
+        return model
+    product_models = str(getattr(server, "product_models", "") or "")
+    return next((item.strip() for item in product_models.split(",") if item.strip()), "")
 
 
 async def _gather_sn_data(
     sn: str,
     factory: str,
-    on_progress: Optional[Callable[[str, str], Awaitable[None]]] = None,
+    on_progress: Optional[ProgressCallback] = None,
 ) -> tuple[dict, list[dict], list[dict], list[dict], list[dict], str, list[dict], list[dict], str]:
     """收集 SN 诊断所需数据。
 
@@ -65,9 +144,14 @@ async def _gather_sn_data(
         (device, llm_logs, maintenance, all_logs, similar_cases, kb_context,
          failed_logs, failed_log_files, merged_error_log)
     """
-    async def _progress(s: str, d: str):
+    async def _progress(
+        s: str,
+        d: str,
+        status: ProgressStatus = "running",
+        metadata: Optional[ProgressMetadata] = None,
+    ) -> None:
         if on_progress:
-            await on_progress(s, d)
+            await on_progress(s, d, status, metadata)
 
     factory_cfg = get_factory_by_id(factory)
     if not factory_cfg:
@@ -76,11 +160,57 @@ async def _gather_sn_data(
 
     await _progress("device", "正在查询设备信息...")
     device = await knowledge_graph.get_device_by_sn(sn)
+    machine_model = str((device or {}).get("model", "") or "").strip()
 
-    await _progress("sims", f"正在向 SIMS（{factory_label}）实时查询测试数据...")
     sims_path = "/stepsmanagement/resultInfo/queryTestList.action"
     sims_params = {"start": 0, "limit": 50, "serverSN": sn, "customerID": ""}
     async with MESDirectService() as mes:
+        if not machine_model:
+            try:
+                server = await mes.get_server(factory, sn)
+                machine_model = _machine_model_from_server(server)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "MES 机型查询失败，使用默认提取 Prompt sn=%s factory=%s error=%s",
+                    sn,
+                    factory,
+                    e,
+                )
+
+        if not device:
+            device = {
+                "id": "",
+                "sn": sn,
+                "model": machine_model,
+                "factory": factory,
+            }
+        elif machine_model and not device.get("model"):
+            device = {**device, "model": machine_model}
+
+        await _progress(
+            "prompt",
+            f"正在加载机型 {machine_model or 'default'} 的日志提取 Prompt...",
+        )
+        extraction_prompt = await PromptRegistry().get_prompt(machine_model)
+        logger.info(
+            "日志提取 Prompt 已解析 sn=%s machine_model=%s prompt_model=%s",
+            sn,
+            machine_model or "default",
+            extraction_prompt.get("model", "default"),
+        )
+        await _progress(
+            "prompt",
+            f"已加载机型 {machine_model or 'default'} 的日志提取 Prompt",
+            "running",
+            {
+                "machine_model": machine_model or "default",
+                "prompt_model": extraction_prompt.get("model", "default"),
+                "system_prompt": extraction_prompt.get("system_prompt", ""),
+                "user_template": extraction_prompt.get("user_template", ""),
+            },
+        )
+
+        await _progress("sims", f"正在向 SIMS（{factory_label}）实时查询测试数据...")
         try:
             result = await mes.get_test_details(factory, server_sn=sn, limit=50)
             raw_logs = result["items"]
@@ -126,15 +256,6 @@ async def _gather_sn_data(
                 f"SIMS 未查询到 SN「{sn}」在「{factory_label}」的测试记录（0 条），"
                 f"请确认 SN 与厂区选择正确，且该设备已在 SIMS 中参与测试。"
             )
-
-        if not device:
-            server = await mes.get_server(factory, sn)
-            device = {
-                "id": "",
-                "sn": sn,
-                "model": server.model if server else "",
-                "factory": factory,
-            }
 
     maintenance = (
         await knowledge_graph.get_device_maintenance_history(device["id"])
@@ -182,7 +303,37 @@ async def _gather_sn_data(
             seen.add(key)
             all_logs.append(log)
 
-    llm_logs = all_logs
+    # 最终诊断只接收异常测试项；完整测试记录仍通过 all_logs 返回给前端展示。
+    llm_logs = failed_logs
+
+    failed_logs_with_path = [
+        log for log in failed_logs if (log.get("log_path") or "").strip()
+    ]
+    if not failed_logs:
+        skip_reason = "未发现失败测试项，无错误日志需要处理"
+    elif not failed_logs_with_path:
+        skip_reason = (
+            f"发现 {len(failed_logs)} 条失败测试项，但均未提供日志路径"
+        )
+    else:
+        skip_reason = ""
+
+    if skip_reason:
+        logger.info(
+            "跳过 AI 错误日志提取 sn=%s failed_count=%d with_path_count=%d reason=%s",
+            sn,
+            len(failed_logs),
+            len(failed_logs_with_path),
+            skip_reason,
+        )
+        for stage, detail in (
+            ("log_download", skip_reason),
+            ("log_split", "没有可拆分的失败项原文日志"),
+            ("log_extract", "没有可提交给 AI 提取的错误日志分段"),
+            ("log_merge", "没有可聚合的错误日志提取结果"),
+        ):
+            metadata = {"file_count": 0} if stage == "log_download" else None
+            await _progress(stage, detail, "skipped", metadata)
 
     _log_file_context, failed_log_files = await _download_failed_item_logs(
         log_base_url=factory_cfg.get("log_base_url", ""),
@@ -193,7 +344,8 @@ async def _gather_sn_data(
         on_progress=_progress if on_progress else None,
         sn=sn,
         factory=factory,
-        machine_model=(device or {}).get("model", ""),
+        machine_model=machine_model,
+        extraction_prompt=extraction_prompt,
     )
     merged_error_log = _merge_extracted_log_files(sn, failed_log_files)
 
@@ -240,6 +392,8 @@ async def _gather_sn_data(
             kb_result = await ragflow_service.search_knowledge_base(
                 question=query, top_k=RAG_TOP_K
             )
+            if kb_result.get("warning"):
+                await _progress("ragflow", str(kb_result["warning"]), "skipped")
             refs = kb_result.get("references", [])
             logger.debug("知识库检索结果", extra={"sn": sn, "refs_count": len(refs)})
             if refs:
@@ -456,17 +610,22 @@ async def get_sn_log_content(
         if not log_base_url:
             return ApiResponse(success=False, error="厂区 log_base_url 未配置")
 
-        content, dl_error = await _download_log_tail(
+        content, download_metadata, dl_error = _unpack_full_download(
+            await _download_log_tail_fetch_full(
             log_base_url,
             safe_path,
             ftp_user=factory_info.get("log_ftp_user"),
             ftp_password=factory_info.get("log_ftp_password"),
+            )
         )
         if dl_error:
             return ApiResponse(success=False, error=dl_error)
         if not content:
             return ApiResponse(success=False, error="日志内容为空")
-        return ApiResponse(success=True, data={"content": content})
+        return ApiResponse(
+            success=True,
+            data={"content": content, "download_metadata": download_metadata},
+        )
     except ValueError as e:
         return ApiResponse(success=False, error=str(e))
     except Exception as e:
@@ -669,8 +828,9 @@ async def _resolve_machine_model(sn: str, factory: str) -> str:
     try:
         async with MESDirectService() as mes:
             server = await mes.get_server(factory, sn)
-            if server and getattr(server, "model", ""):
-                return str(server.model)
+            machine_model = _machine_model_from_server(server)
+            if machine_model:
+                return machine_model
     except Exception as e:  # noqa: BLE001
         logger.debug("mes.get_server 解析机型失败 sn=%s: %s", sn, e)
     return ""
@@ -686,7 +846,8 @@ async def _download_and_extract_log(
     sn: str = "",
     factory: str = "",
     machine_model: str = "",
-    on_progress: Optional[Callable[[str, str], Awaitable[None]]] = None,
+    extraction_prompt: Optional[dict] = None,
+    on_progress: Optional[ProgressCallback] = None,
 ) -> tuple[str, dict]:
     """
     下载日志文件并执行「智能日志提取」（独立日志处理模块）。
@@ -702,14 +863,21 @@ async def _download_and_extract_log(
 
     safe_log_path = validate_log_path(log_path)
     if on_progress:
-        await on_progress("log_download", f"正在下载日志 {safe_log_path.rsplit('/', 1)[-1]}")
+        await on_progress(
+            "log_download",
+            f"正在下载日志 {safe_log_path.rsplit('/', 1)[-1]}",
+            "running",
+            None,
+        )
 
-    # 下载完整日志
-    content, dl_error = await _download_log_tail_fetch_full(
-        log_base_url,
-        safe_log_path,
-        ftp_user=ftp_user,
-        ftp_password=ftp_password,
+    # 流式下载；超出安全上限时仅保留头尾，并携带明确的截断元数据。
+    content, download_metadata, dl_error = _unpack_full_download(
+        await _download_log_tail_fetch_full(
+            log_base_url,
+            safe_log_path,
+            ftp_user=ftp_user,
+            ftp_password=ftp_password,
+        )
     )
     if dl_error:
         return "", {"error": dl_error, "matched_lines": 0, "paragraphs": 0, "total_lines": 0}
@@ -720,13 +888,19 @@ async def _download_and_extract_log(
     if not machine_model:
         machine_model = await _resolve_machine_model(sn, factory)
 
+    async def processing_progress(stage: str, detail: str) -> None:
+        if on_progress:
+            await on_progress(stage, detail, "running", None)
+
     # 智能提取（AI 分段并发，失败/未配置自动回退编码级）
     result = await process_log(
         content,
         machine_model,
+        prompt_config=extraction_prompt,
         mode=extraction_mode,
-        on_progress=on_progress,
+        on_progress=processing_progress if on_progress else None,
     )
+    result["stats"].update(download_metadata)
     return result["extracted"], result["stats"]
 
 
@@ -736,27 +910,33 @@ async def _download_log_tail_fetch_full(
     *,
     ftp_user: Optional[str] = None,
     ftp_password: Optional[str] = None,
-) -> tuple[str, Optional[str]]:
+) -> tuple[str, dict, Optional[str]]:
     """
-    获取日志完整内容（供智能提取使用），使用 MAX_LOG_BYTES 安全上限。
-    与 _download_log_tail 共享底层下载逻辑但不做尾部截断。
+    获取日志内容（供智能提取使用），使用 MAX_LOG_BYTES 固定内存上限。
+    超限时保留头尾各一半，避免只看文件末尾而漏掉启动阶段异常。
     """
     from ..core.utils import build_log_download_url
 
     if not log_base_url or not log_path:
-        return "", "log_base_url 或 log_path 为空"
+        return "", {}, "log_base_url 或 log_path 为空"
     url = build_log_download_url(log_base_url, log_path)
     if not url:
-        return "", "log_base_url 或 log_path 为空"
+        return "", {}, "log_base_url 或 log_path 为空"
 
     try:
         if url.startswith("ftp://"):
             return await _download_ftp_full(url, ftp_user=ftp_user, ftp_password=ftp_password)
 
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            text = resp.text
+            collector = _BoundedByteCollector()
+            async with client.stream("GET", url) as resp:
+                if resp.is_error:
+                    await resp.aread()
+                    resp.raise_for_status()
+                async for chunk in resp.aiter_bytes(64 * 1024):
+                    collector.feed(chunk)
+            raw, metadata = collector.result()
+            text = raw.decode(resp.encoding or "utf-8", errors="replace")
 
             # HTML 日志转纯文本
             if url.endswith(".html"):
@@ -767,32 +947,34 @@ async def _download_log_tail_fetch_full(
                         for elem in list(tree.iter(tag)):
                             elem.drop_tree()
                     lines = [ln for ln in tree.text_content().strip().splitlines() if ln.strip()]
-                    return "\n".join(lines), None
+                    return "\n".join(lines), metadata, None
                 except Exception as e:
                     logger.warning(
                         "HTML 解析失败 url=%s error_type=%s error=%s",
                         url, type(e).__name__, e,
                     )
 
-            # 安全截断（2MB 上限）
-            if len(text) > MAX_LOG_BYTES:
-                text = text[-MAX_LOG_BYTES:]
-                logger.info("日志超出 %d 字节上限，已截断尾部 url=%s", MAX_LOG_BYTES, url)
-
-            return text, None
+            if metadata["source_truncated"]:
+                logger.info(
+                    "日志超出 %d 字节上限，保留头尾 url=%s source_bytes=%d",
+                    MAX_LOG_BYTES,
+                    url,
+                    metadata["source_size"],
+                )
+            return text, metadata, None
 
     except httpx.HTTPStatusError as e:
         detail = f"HTTP 日志下载失败: {e.response.status_code} {e.response.reason_phrase} url={url}"
         logger.warning("%s body_preview=%s", detail, (e.response.text or "")[:200])
-        return "", detail
+        return "", {}, detail
     except httpx.RequestError as e:
         detail = f"HTTP 日志下载网络错误 url={url} error={type(e).__name__}: {e}"
         logger.warning(detail)
-        return "", detail
+        return "", {}, detail
     except Exception as e:
         detail = f"日志下载失败 url={url} error={type(e).__name__}: {e}"
         logger.warning(detail)
-        return "", detail
+        return "", {}, detail
 
 
 async def _download_ftp_full(
@@ -800,14 +982,13 @@ async def _download_ftp_full(
     *,
     ftp_user: Optional[str] = None,
     ftp_password: Optional[str] = None,
-) -> tuple[str, Optional[str]]:
+) -> tuple[str, dict, Optional[str]]:
     """FTP 下载日志完整内容（供智能提取使用）。"""
     from urllib.parse import urlparse, unquote
     import ftplib
-    import io
 
     if not _ftp_has_explicit_credentials(url, ftp_user, ftp_password):
-        return await _download_log_tail_ftp_urlopen(url, MAX_LOG_BYTES)
+        return await _download_ftp_full_urlopen(url)
 
     parsed = urlparse(url)
     host = parsed.hostname or "localhost"
@@ -821,28 +1002,53 @@ async def _download_ftp_full(
 
     try:
         loop = asyncio.get_event_loop()
-        buf = io.BytesIO()
+        collector = _BoundedByteCollector()
 
         def _ftp_download():
             ftp = ftplib.FTP()
             ftp.connect(host, port, timeout=30)
             ftp.login(auth_user, auth_password)
-            ftp.retrbinary(f"RETR {path}", buf.write)
+            ftp.retrbinary(f"RETR {path}", collector.feed, blocksize=64 * 1024)
             ftp.quit()
 
         await loop.run_in_executor(None, _ftp_download)
-        raw = buf.getvalue()
+        raw, metadata = collector.result()
         text = raw.decode("utf-8", errors="replace")
-        if len(text) > MAX_LOG_BYTES:
-            text = text[-MAX_LOG_BYTES:]
-            logger.info("FTP 日志超出 %d 字节上限，已截断尾部 url=%s", MAX_LOG_BYTES, url)
-        return text, None
+        if metadata["source_truncated"]:
+            logger.info(
+                "FTP 日志超出 %d 字节上限，保留头尾 url=%s source_bytes=%d",
+                MAX_LOG_BYTES,
+                url,
+                metadata["source_size"],
+            )
+        return text, metadata, None
     except Exception as e:
         detail = _describe_ftp_error(e, host=host, port=port, path=path,
                                       auth_user=auth_user,
                                       used_anonymous=(auth_user == "anonymous"))
         logger.warning(detail)
-        return "", detail
+        return "", {}, detail
+
+
+async def _download_ftp_full_urlopen(url: str) -> tuple[str, dict, Optional[str]]:
+    """无显式凭据的 FTP 下载，使用固定内存的头尾采集器。"""
+    import urllib.request
+
+    def _fetch() -> tuple[bytes, dict]:
+        collector = _BoundedByteCollector()
+        with urllib.request.urlopen(url, timeout=30) as response:
+            while chunk := response.read(64 * 1024):
+                collector.feed(chunk)
+        return collector.result()
+
+    try:
+        loop = asyncio.get_running_loop()
+        raw, metadata = await loop.run_in_executor(None, _fetch)
+        return raw.decode("utf-8", errors="replace"), metadata, None
+    except Exception as e:
+        detail = f"FTP 日志下载失败 url={url} error={type(e).__name__}: {e}"
+        logger.warning(detail)
+        return "", {}, detail
 
 
 async def _download_failed_item_logs(
@@ -852,11 +1058,12 @@ async def _download_failed_item_logs(
     factory_label: str,
     ftp_user: Optional[str] = None,
     ftp_password: Optional[str] = None,
-    on_progress: Optional[Callable[[str, str], Awaitable[None]]] = None,
-    max_files: int = 5,
+    on_progress: Optional[ProgressCallback] = None,
+    max_files: int = 2,
     sn: str = "",
     factory: str = "",
     machine_model: str = "",
+    extraction_prompt: Optional[dict] = None,
 ) -> tuple[str, list[dict]]:
     """下载失败项原文日志（使用智能提取替代简单 tail 截断）。
 
@@ -870,6 +1077,23 @@ async def _download_failed_item_logs(
     if not with_path:
         return "", []
 
+    latest_logs = sorted(
+        with_path,
+        key=lambda log: _normalize_test_time(log.get("test_time", "")),
+        reverse=True,
+    )[:max_files]
+
+    selected_logs: list[dict] = []
+    seen_dedupe_keys: set[tuple[str, str]] = set()
+    for failed_log in latest_logs:
+        log_path = (failed_log.get("log_path") or "").strip()
+        test_item = (failed_log.get("test_item") or "").strip()
+        dedupe_key = ("test_item", test_item) if test_item else ("log_path", log_path)
+        if dedupe_key in seen_dedupe_keys:
+            continue
+        seen_dedupe_keys.add(dedupe_key)
+        selected_logs.append(failed_log)
+
     if not log_base_url:
         raise ValueError(
             f"厂区「{factory_label}」未配置 log_base_url，无法下载失败项原文日志，已中止诊断。"
@@ -878,14 +1102,17 @@ async def _download_failed_item_logs(
     if on_progress:
         await on_progress(
             "log_download",
-            f"正在下载并提取失败项原文日志（最多 {min(len(with_path), max_files)} 个）...",
+            f"正在分析最新 {max_files} 条失败日志（按测试项目去重后 {len(selected_logs)} 个文件）...",
+            "running",
+            {"file_count": len(selected_logs)},
         )
 
     blocks: list[str] = []
     errors: list[str] = []
+    non_anomalous_count = 0
     failed_log_files: list[dict] = []
 
-    for fl in with_path[:max_files]:
+    for fl in selected_logs:
         log_path = (fl.get("log_path") or "").strip()
         # 使用智能提取（AI 分段并发 + 编码级回退）替代原本的 tail 截断
         extracted, stats = await _download_and_extract_log(
@@ -897,11 +1124,88 @@ async def _download_failed_item_logs(
             sn=sn,
             factory=factory,
             machine_model=machine_model,
+            extraction_prompt=extraction_prompt,
             on_progress=on_progress,
         )
         dl_error = stats.get("error")
         if dl_error:
             errors.append(f"{fl.get('test_item', log_path)}: {dl_error}")
+            continue
+
+        original_lines = int(
+            stats.get("preprocessing_original_lines")
+            or stats.get("total_lines", 0)
+            or 0
+        )
+        kept_lines = int(stats.get("preprocessing_kept_lines", original_lines) or 0)
+        removed_lines = int(stats.get("preprocessing_removed_lines", 0) or 0)
+        removal_rate = removed_lines / original_lines if original_lines else 0.0
+        preprocessing_applied = bool(stats.get("preprocessing_applied", False))
+        source_truncated = bool(stats.get("source_truncated", False))
+        source_line_count = int(stats.get("source_line_count", original_lines) or 0)
+        if source_truncated:
+            comparison_detail = (
+                f"{fl.get('test_item') or log_path}: 源文件约 {source_line_count} 行 / "
+                f"{int(stats.get('source_size', 0) or 0)} 字节，下载时按头尾保留 "
+                f"{int(stats.get('downloaded_size', 0) or 0)} 字节；采样内容 "
+                f"{original_lines} 行，清洗后 {kept_lines} 行"
+            )
+        elif preprocessing_applied:
+            comparison_detail = (
+                f"{fl.get('test_item') or log_path}: 原文件 {original_lines} 行，"
+                f"清洗后 {kept_lines} 行，过滤 {removed_lines} 行"
+                f"（{removal_rate:.1%}）"
+            )
+        else:
+            comparison_detail = (
+                f"{fl.get('test_item') or log_path}: 原文件 {original_lines} 行，"
+                "未触发规则清洗，全文进入后续提取"
+            )
+        comparison_metadata = {
+            "test_item": fl.get("test_item", ""),
+            "log_path": log_path,
+            "original_lines": original_lines,
+            "kept_lines": kept_lines,
+            "removed_lines": removed_lines,
+            "removal_rate": round(removal_rate, 4),
+            "preprocessing_applied": preprocessing_applied,
+            "recognized_level_lines": int(
+                stats.get("preprocessing_level_lines", 0) or 0
+            ),
+            "anomaly_entries": int(
+                stats.get("preprocessing_anomaly_entries", 0) or 0
+            ),
+        }
+        if source_truncated:
+            comparison_metadata.update(
+                {
+                    "source_size": int(stats.get("source_size", 0) or 0),
+                    "downloaded_size": int(stats.get("downloaded_size", 0) or 0),
+                    "source_line_count": source_line_count,
+                    "source_truncated": True,
+                    "truncation_strategy": stats.get("truncation_strategy", "head_tail"),
+                }
+            )
+        if on_progress:
+            await on_progress(
+                "log_merge",
+                comparison_detail,
+                "running",
+                {
+                    "log_comparison": comparison_metadata
+                },
+            )
+
+        detected_error_count = stats.get("error_count")
+        if detected_error_count is None:
+            detected_error_count = stats.get("matched_lines", 0)
+        if not isinstance(detected_error_count, (int, float)) or detected_error_count <= 0:
+            non_anomalous_count += 1
+            logger.info(
+                "日志未检测到异常，不加入最终分析 sn=%s log_path=%s",
+                sn,
+                log_path,
+            )
             continue
         if not extracted.strip():
             errors.append(f"{fl.get('test_item', log_path)}: 日志内容为空")
@@ -915,6 +1219,33 @@ async def _download_failed_item_logs(
             "extracted_content": extracted,
             "matched_lines": stats.get("matched_lines", stats.get("error_count", 0)),
             "total_lines": stats.get("total_lines", 0),
+            "ai_extracted": stats.get("ai_extracted", False),
+            "processing_mode": stats.get("processing_mode", ""),
+            "segment_count": stats.get("segment_count", 0),
+            "successful_segments": stats.get("successful_segments", 0),
+            "failed_segments": stats.get("failed_segments", 0),
+            "extraction_duration_ms": stats.get("extraction_duration_ms", 0),
+            "model_used": stats.get("model_used", ""),
+            "prompt_model": stats.get("prompt_model", ""),
+            "preprocessing_applied": stats.get("preprocessing_applied", False),
+            "preprocessing_original_lines": stats.get(
+                "preprocessing_original_lines", stats.get("total_lines", 0)
+            ),
+            "preprocessing_kept_lines": stats.get("preprocessing_kept_lines", 0),
+            "preprocessing_removed_lines": stats.get("preprocessing_removed_lines", 0),
+            "preprocessing_retention_ratio": stats.get(
+                "preprocessing_retention_ratio", 1.0
+            ),
+            "preprocessing_level_lines": stats.get("preprocessing_level_lines", 0),
+            "preprocessing_anomaly_entries": stats.get(
+                "preprocessing_anomaly_entries", 0
+            ),
+            "source_size": stats.get("source_size", 0),
+            "downloaded_size": stats.get("downloaded_size", 0),
+            "source_line_count": stats.get("source_line_count", 0),
+            "source_truncated": stats.get("source_truncated", False),
+            "truncation_strategy": stats.get("truncation_strategy", "none"),
+            "retry_count": stats.get("retry_count", 0),
         })
 
         if stats.get("ai_extracted"):
@@ -936,6 +1267,15 @@ async def _download_failed_item_logs(
         )
 
     if not blocks:
+        if non_anomalous_count:
+            if on_progress:
+                await on_progress(
+                    "log_merge",
+                    f"已检查 {non_anomalous_count} 个文件，均未检测到异常，未加入最终分析",
+                    "running",
+                    None,
+                )
+            return "", []
         detail = "；".join(errors[:3])
         if len(errors) > 3:
             detail += f" … 共 {len(errors)} 条失败"
@@ -945,7 +1285,9 @@ async def _download_failed_item_logs(
         msg = f"已提取 {len(blocks)} 份失败项原文日志"
         if errors:
             msg += f"（{len(errors)} 条下载失败已跳过）"
-        await on_progress("log_merge", msg)
+        if non_anomalous_count:
+            msg += f"（{non_anomalous_count} 个文件未发现异常，未加入分析）"
+        await on_progress("log_merge", msg, "running", None)
 
     markdown = "\n\n## 失败项原文日志（SIMS log_path — 智能提取）\n" + "\n\n".join(blocks)
     return markdown, failed_log_files
@@ -1518,8 +1860,21 @@ async def diagnose_sn_stream(
     async def event_stream():
         queue: asyncio.Queue[dict] = asyncio.Queue()
 
-        async def progress(stage: str, detail: str) -> None:
-            await queue.put({"type": "progress", "stage": stage, "detail": detail})
+        async def progress(
+            stage: str,
+            detail: str,
+            status: ProgressStatus = "running",
+            metadata: Optional[ProgressMetadata] = None,
+        ) -> None:
+            await queue.put(
+                {
+                    "type": "progress",
+                    "stage": stage,
+                    "detail": detail,
+                    "status": status,
+                    "meta": metadata or {},
+                }
+            )
 
         async def run_diagnosis() -> None:
             try:
@@ -1750,6 +2105,243 @@ async def get_sn_history_detail(
 # ── 诊断反馈 ──
 
 
+def _feedback_query(
+    *,
+    user_id: str = "",
+    factory: str = "",
+    rating: str = "",
+    status: str = "",
+    keyword: str = "",
+) -> dict:
+    clauses: list[dict] = []
+    if user_id:
+        clauses.append({"user_id": user_id})
+    if factory:
+        clauses.append({"factory": factory})
+    if rating:
+        clauses.append({"rating": rating})
+    if status:
+        if status == "pending":
+            clauses.append(
+                {
+                    "$or": [
+                        {"status": "pending"},
+                        {"status": None},
+                        {"status": {"$exists": False}},
+                    ]
+                }
+            )
+        else:
+            clauses.append({"status": status})
+    normalized_keyword = keyword.strip()
+    if normalized_keyword:
+        pattern = re.escape(normalized_keyword)
+        clauses.append(
+            {
+                "$or": [
+                    {"sn": {"$regex": pattern, "$options": "i"}},
+                    {"comment": {"$regex": pattern, "$options": "i"}},
+                    {"diagnosis_context": {"$regex": pattern, "$options": "i"}},
+                ]
+            }
+        )
+    if not clauses:
+        return {}
+    return clauses[0] if len(clauses) == 1 else {"$and": clauses}
+
+
+def _serialize_feedback(doc: dict, fallback_user: Optional[dict] = None) -> dict:
+    submitter = doc.get("submitter") or {}
+    submitter_id = str(submitter.get("id") or doc.get("user_id") or "")
+    fallback_email = ""
+    if fallback_user and submitter_id == str(fallback_user.get("id") or ""):
+        fallback_email = str(fallback_user.get("email") or "")
+    return {
+        "id": str(doc["_id"]),
+        "history_id": doc.get("history_id"),
+        "sn": doc.get("sn", ""),
+        "factory": doc.get("factory", ""),
+        "rating": doc.get("rating", "unsolved"),
+        "comment": doc.get("comment") or "",
+        "diagnosis_context": doc.get("diagnosis_context") or "",
+        "status": doc.get("status") or "pending",
+        "resolution_note": doc.get("resolution_note") or "",
+        "created_at": doc.get("created_at", ""),
+        "updated_at": doc.get("updated_at", ""),
+        "knowledge_document_ids": doc.get("knowledge_document_ids", []),
+        "knowledge_title": doc.get("knowledge_title", ""),
+        "knowledge_uploaded_at": doc.get("knowledge_uploaded_at", ""),
+        "submitter": {
+            "id": submitter_id,
+            "email": str(submitter.get("email") or fallback_email),
+        },
+    }
+
+
+@router.get("/feedback", response_model=ApiResponse)
+async def list_diagnosis_feedback(
+    factory: str = Query(""),
+    rating: Literal["", "solved", "partially", "unsolved"] = Query(""),
+    status: Literal["", "pending", "processing", "resolved", "ignored"] = Query(""),
+    keyword: str = Query("", max_length=100),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+):
+    """分页查询诊断反馈并返回当前厂区/关键词范围内的汇总。"""
+    col = get_collection("diagnosis_feedback")
+    base_query = _feedback_query(
+        user_id=current_user["id"],
+        factory=factory,
+        keyword=keyword,
+    )
+    list_query = _feedback_query(
+        user_id=current_user["id"],
+        factory=factory,
+        rating=rating,
+        status=status,
+        keyword=keyword,
+    )
+
+    def with_filter(extra: dict) -> dict:
+        return {"$and": [base_query, extra]} if base_query else extra
+
+    try:
+        total, solved, partially, unsolved, pending, processing = await asyncio.gather(
+            col.count_documents(base_query),
+            col.count_documents(with_filter({"rating": "solved"})),
+            col.count_documents(with_filter({"rating": "partially"})),
+            col.count_documents(with_filter({"rating": "unsolved"})),
+            col.count_documents(
+                with_filter(
+                    {
+                        "$or": [
+                            {"status": "pending"},
+                            {"status": None},
+                            {"status": {"$exists": False}},
+                        ]
+                    }
+                )
+            ),
+            col.count_documents(with_filter({"status": "processing"})),
+        )
+        filtered_total = await col.count_documents(list_query)
+        cursor = (
+            col.find(list_query)
+            .sort("created_at", -1)
+            .skip((page - 1) * limit)
+            .limit(limit)
+        )
+        docs = await cursor.to_list(length=limit)
+        return ApiResponse(
+            success=True,
+            data={
+                "items": [_serialize_feedback(doc, current_user) for doc in docs],
+                "total": filtered_total,
+                "page": page,
+                "limit": limit,
+                "summary": {
+                    "total": total,
+                    "solved": solved,
+                    "partially": partially,
+                    "unsolved": unsolved,
+                    "pending": pending,
+                    "processing": processing,
+                    "solved_rate": round(solved / total, 4) if total else 0,
+                },
+            },
+        )
+    except Exception as e:
+        logger.exception("查询诊断反馈失败")
+        return ApiResponse(success=False, error=f"查询反馈失败: {e}")
+
+
+@router.patch("/feedback/{feedback_id}", response_model=ApiResponse)
+async def update_diagnosis_feedback(
+    feedback_id: str,
+    request: DiagnosisFeedbackStatusRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """更新反馈处理状态和处理备注。"""
+    now = utc_now_iso()
+    col = get_collection("diagnosis_feedback")
+    try:
+        feedback_object_id = parse_object_id(feedback_id)
+        result = await col.update_one(
+            {"_id": feedback_object_id, "user_id": current_user["id"]},
+            {
+                "$set": {
+                    "status": request.status,
+                    "resolution_note": (request.resolution_note or "").strip(),
+                    "updated_at": now,
+                    "updated_by": current_user["id"],
+                }
+            },
+        )
+        if not result.matched_count:
+            return ApiResponse(success=False, error="反馈不存在")
+        doc = await col.find_one(
+            {"_id": feedback_object_id, "user_id": current_user["id"]}
+        )
+        if not doc:
+            return ApiResponse(success=False, error="反馈不存在")
+        return ApiResponse(
+            success=True,
+            data=_serialize_feedback(doc, current_user),
+            message="反馈状态已更新",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("更新诊断反馈失败", extra={"feedback_id": feedback_id})
+        return ApiResponse(success=False, error=f"更新反馈失败: {e}")
+
+
+@router.post("/feedback/{feedback_id}/knowledge", response_model=ApiResponse)
+async def link_feedback_knowledge(
+    feedback_id: str,
+    request: DiagnosisFeedbackKnowledgeRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """记录由反馈快速补充到知识库的文档。"""
+    col = get_collection("diagnosis_feedback")
+    now = utc_now_iso()
+    try:
+        feedback_object_id = parse_object_id(feedback_id)
+        query = {"_id": feedback_object_id, "user_id": current_user["id"]}
+        result = await col.update_one(
+            query,
+            {
+                "$addToSet": {
+                    "knowledge_document_ids": {"$each": request.document_ids}
+                },
+                "$set": {
+                    "knowledge_title": request.knowledge_title,
+                    "knowledge_uploaded_at": now,
+                    "updated_at": now,
+                    "updated_by": current_user["id"],
+                },
+            },
+        )
+        if not result.matched_count:
+            return ApiResponse(success=False, error="反馈不存在")
+        doc = await col.find_one(query)
+        if not doc:
+            return ApiResponse(success=False, error="反馈不存在")
+        return ApiResponse(
+            success=True,
+            data=_serialize_feedback(doc, current_user),
+            message="知识已补充并关联到反馈",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(
+            "关联反馈知识文档失败", extra={"feedback_id": feedback_id}
+        )
+        return ApiResponse(success=False, error=f"关联知识文档失败: {e}")
+
+
 @router.post("/feedback", response_model=ApiResponse)
 async def submit_diagnosis_feedback(
     request: DiagnosisFeedbackRequest,
@@ -1767,12 +2359,19 @@ async def submit_diagnosis_feedback(
         # 构建反馈文档
         feedback_doc = {
             "user_id": current_user["id"],
+            "submitter": {
+                "id": current_user["id"],
+                "email": current_user.get("email") or "",
+            },
             "history_id": request.history_id,
             "sn": request.sn,
             "factory": request.factory,
             "rating": request.rating,
             "comment": request.comment,
             "diagnosis_context": request.diagnosis_context,
+            "status": "pending",
+            "resolution_note": "",
+            "knowledge_document_ids": [],
             "created_at": utc_now_iso(),
         }
 

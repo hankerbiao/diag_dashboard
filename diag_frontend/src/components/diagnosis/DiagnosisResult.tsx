@@ -119,6 +119,19 @@ function RawLogRow({ log, factory, sn }: { log: TestLogItem; factory: string; sn
 /** 被 AI 分析的日志文件下载行 */
 function LogFileDownloadRow({ logFile }: { logFile: FailedLogFile }) {
   const filename = `${logFile.test_time.replace(/[/\\:]/g, '-')}_${logFile.test_item.replace(/[/\\:]/g, '_')}.log`;
+  const duration = logFile.extraction_duration_ms >= 1000
+    ? `${(logFile.extraction_duration_ms / 1000).toFixed(1)} 秒`
+    : `${logFile.extraction_duration_ms} 毫秒`;
+  const modeLabel = logFile.ai_extracted
+    ? logFile.processing_mode === 'prefiltered_chunked'
+      ? '规则清洗 + AI 分块提取'
+      : logFile.processing_mode === 'chunked'
+        ? 'AI 分块提取'
+        : 'AI 整体提取'
+    : '编码级回退';
+  const originalLines = logFile.preprocessing_original_lines ?? logFile.total_lines;
+  const removedLines = logFile.preprocessing_removed_lines ?? 0;
+  const removalRate = originalLines > 0 ? removedLines / originalLines : 0;
   return (
     <div className="flex items-center justify-between px-4 py-3 text-[12px]">
       <div className="flex-1 min-w-0">
@@ -126,6 +139,33 @@ function LogFileDownloadRow({ logFile }: { logFile: FailedLogFile }) {
         <div className="mt-0.5 flex items-center gap-3" style={{ color: 'var(--color-text-muted)' }}>
           <span className="font-mono">{logFile.test_time}</span>
           <span>{logFile.matched_lines} 个错误行 / {logFile.total_lines} 行</span>
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+          <span style={{ color: logFile.ai_extracted ? '#059669' : '#d97706' }}>{modeLabel}</span>
+          {logFile.ai_extracted && <span>模型: {logFile.model_used || 'default'}</span>}
+          {logFile.segment_count > 0 && (
+            <span>
+              分块: {logFile.successful_segments}/{logFile.segment_count} 成功
+              {logFile.failed_segments > 0 ? `，${logFile.failed_segments} 块回退` : ''}
+            </span>
+          )}
+          {logFile.preprocessing_applied ? (
+            <span>
+              清洗对比: 原始 {originalLines} 行 → 保留 {logFile.preprocessing_kept_lines ?? 0} 行，
+              过滤 {removedLines} 行（{(removalRate * 100).toFixed(1)}%）
+            </span>
+          ) : (
+            <span>清洗对比: 原始 {originalLines} 行，未触发规则清洗</span>
+          )}
+          {logFile.source_truncated && (
+            <span style={{ color: '#d97706' }}>
+              大文件采样: 源文件约 {logFile.source_line_count ?? 0} 行，按头尾保留
+              {' '}{Math.round((logFile.downloaded_size ?? 0) / 1024)} KB /
+              {' '}{Math.round((logFile.source_size ?? 0) / 1024)} KB
+            </span>
+          )}
+          {(logFile.retry_count ?? 0) > 0 && <span>模型重试: {logFile.retry_count} 次</span>}
+          <span>耗时: {duration}</span>
         </div>
       </div>
       <button
@@ -163,26 +203,25 @@ export default function DiagnosisResult({ result, factory, historyId }: Diagnosi
 
   return (
     <div
-      className="flex-1 border-r flex flex-col min-h-0 relative"
+      className="relative flex min-h-0 min-w-0 flex-1 flex-col border-b xl:border-b-0 xl:border-r"
       style={{
         backgroundColor: 'var(--color-bg-secondary)',
         borderColor: 'var(--color-border)',
       }}
     >
-      <div className="p-8 flex-1 overflow-y-auto w-full mx-auto flex flex-col gap-8 custom-scrollbar">
+      <div className="custom-scrollbar mx-auto flex w-full flex-1 flex-col gap-6 overflow-y-auto p-4 sm:p-6 lg:p-8">
         <div className="flex items-start gap-4">
           <div
-            className="w-9 h-9 rounded-xl flex items-center justify-center text-white shadow-lg shrink-0"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-blue-600 text-white shadow-sm"
             style={{
-              background: 'linear-gradient(135deg, #3b82f6, #6366f1)',
-              boxShadow: '0 4px 12px -2px rgba(59, 130, 246, 0.4)',
+              boxShadow: '0 4px 12px -3px rgba(37, 99, 235, 0.35)',
             }}
           >
             <Bot className="w-5 h-5" />
           </div>
           <div className="flex-1 space-y-5 mt-1">
             <div
-              className="p-5 rounded-2xl text-sm leading-relaxed shadow-sm border"
+              className="rounded-lg border p-4 text-[13px] leading-6 shadow-sm sm:p-5"
               style={{
                 backgroundColor: 'var(--color-bg-primary)',
                 borderColor: 'var(--color-border)',
@@ -205,6 +244,28 @@ export default function DiagnosisResult({ result, factory, historyId }: Diagnosi
                   共识别 {failedLogs.length} 条失败测试项，可在下方查看日志详情。
                 </span>
               )}
+              {result.merged_error_log && (
+                <div
+                  className="mt-4 pt-3 border-t flex items-center justify-between gap-3 flex-wrap"
+                  style={{ borderColor: 'var(--color-border)' }}
+                >
+                  <div className="min-w-0">
+                    <div className="text-[12px] font-semibold">AI 提取错误日志</div>
+                    <div className="text-[11px] mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
+                      已聚合 {result.failed_log_files?.length ?? 0} 份失败日志，与本次诊断输入一致
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => downloadTextAsFile(result.merged_error_log!, `${result.sn}_extracted_error_logs.txt`)}
+                    className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[12px] font-bold transition-opacity hover:opacity-80"
+                    style={{ borderColor: 'rgba(16,185,129,0.3)', color: '#059669', backgroundColor: 'rgba(16,185,129,0.08)' }}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    下载提取后的错误日志
+                  </button>
+                </div>
+              )}
             </div>
 
             {result.summary && (
@@ -216,7 +277,7 @@ export default function DiagnosisResult({ result, factory, historyId }: Diagnosi
                   <Activity className="w-4 h-4 text-amber-500" /> 智能诊断结果
                 </h3>
                 <div
-                  className="p-5 border rounded-2xl shadow-sm relative overflow-hidden"
+                  className="relative overflow-hidden rounded-lg border p-4 shadow-sm sm:p-5"
                   style={{
                     background: catStyle.bg,
                     borderColor: catStyle.border,
@@ -224,7 +285,7 @@ export default function DiagnosisResult({ result, factory, historyId }: Diagnosi
                   }}
                 >
                   <div
-                    className="absolute top-0 right-0 px-3 py-1 text-white rounded-bl-xl text-[10px] font-bold shadow-sm"
+                    className="absolute right-0 top-0 rounded-bl-md px-3 py-1 text-[10px] font-bold text-white shadow-sm"
                     style={{ backgroundColor: catStyle.badge }}
                   >
                     置信度: {Math.round(result.confidence * 100)}%
@@ -427,26 +488,6 @@ export default function DiagnosisResult({ result, factory, historyId }: Diagnosi
                   className="rounded-xl border overflow-hidden shadow-sm divide-y"
                   style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}
                 >
-                  {result.merged_error_log && (
-                    <div className="flex items-center justify-between px-4 py-3 text-[12px]">
-                      <div className="flex-1 min-w-0">
-                        <div className="font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-                          聚合错误日志
-                        </div>
-                        <div className="mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                          已整合 {result.failed_log_files.length} 份日志，内容与本次诊断输入一致
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => downloadTextAsFile(result.merged_error_log!, `${result.sn}_aggregated_errors.txt`)}
-                        className="shrink-0 text-[11px] px-3 py-1.5 rounded-lg border font-bold transition-colors flex items-center gap-1.5 hover:opacity-80"
-                        style={{ borderColor: 'var(--color-border)', color: '#059669', backgroundColor: 'rgba(16,185,129,0.08)' }}
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        下载聚合结果
-                      </button>
-                    </div>
-                  )}
                   {result.failed_log_files.map((lf, idx) => (
                     <LogFileDownloadRow key={lf.log_path || idx} logFile={lf} />
                   ))}

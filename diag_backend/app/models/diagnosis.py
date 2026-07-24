@@ -50,6 +50,27 @@ class FailedLogFile(BaseModel):
     extracted_content: str          # 智能提取后的日志内容
     matched_lines: int = 0          # 匹配到的错误行数
     total_lines: int = 0            # 日志总行数
+    ai_extracted: bool = False
+    processing_mode: str = ""
+    segment_count: int = 0
+    successful_segments: int = 0
+    failed_segments: int = 0
+    extraction_duration_ms: int = 0
+    model_used: str = ""
+    prompt_model: str = ""
+    preprocessing_applied: bool = False
+    preprocessing_original_lines: int = 0
+    preprocessing_kept_lines: int = 0
+    preprocessing_removed_lines: int = 0
+    preprocessing_retention_ratio: float = 1.0
+    preprocessing_level_lines: int = 0
+    preprocessing_anomaly_entries: int = 0
+    source_size: int = 0
+    downloaded_size: int = 0
+    source_line_count: int = 0
+    source_truncated: bool = False
+    truncation_strategy: str = "none"
+    retry_count: int = 0
 
 
 class SimilarCaseItem(BaseModel):

@@ -1,5 +1,20 @@
 import { useState, useCallback, useEffect, useRef, type KeyboardEvent } from 'react';
-import { Bot, Clock, ChevronRight, Loader2 } from 'lucide-react';
+import {
+  Activity,
+  AlertCircle,
+  ArrowUpRight,
+  Bot,
+  Building2,
+  ChevronRight,
+  Clock,
+  Cpu,
+  Database,
+  FileSearch,
+  Loader2,
+  RefreshCw,
+  SearchCheck,
+  Square,
+} from 'lucide-react';
 import type { FactorySite, DiagnosisResult as DiagnosisResultType, SnHistoryItem as SnHistoryItemType } from '../../api/fastapi';
 import { diagnosisApi } from '../../api/fastapi';
 import { useToast } from '../../contexts/ToastContext';
@@ -13,6 +28,7 @@ import { collectFailedTestLogs } from '../../utils/testStatus';
 
 const SN_STAGES = [
   'device',
+  'prompt',
   'sims',
   'log_download',
   'log_split',
@@ -24,15 +40,39 @@ const SN_STAGES = [
 ] as const;
 const SN_STAGE_LABELS: Record<string, string> = {
   device: '查询设备信息',
+  prompt: '加载机型日志提取 Prompt',
   sims: 'SIMS 实时查询测试数据',
   log_download: '下载失败项原文日志',
   log_split: '自适应拆分错误日志',
-  log_extract: '分块调用 AI 提取错误',
+  log_extract: '调用 AI 提取错误日志',
   log_merge: '聚合全部错误日志',
   cases: '匹配历史案例',
   ragflow: '检索知识库文档',
   llm: '大模型深度诊断推理',
 };
+
+interface PromptDetails {
+  machineModel: string;
+  promptModel: string;
+  systemPrompt: string;
+  userTemplate: string;
+}
+
+interface LogComparisonSummary {
+  testItem: string;
+  logPath: string;
+  originalLines: number;
+  keptLines: number;
+  removedLines: number;
+  removalRate: number;
+  preprocessingApplied: boolean;
+  recognizedLevelLines: number;
+  anomalyEntries: number;
+  sourceSize?: number;
+  downloadedSize?: number;
+  sourceLineCount?: number;
+  sourceTruncated?: boolean;
+}
 
 function buildDiagnosisContext(result: DiagnosisResultType) {
   const lines = [
@@ -55,7 +95,28 @@ function buildDiagnosisContext(result: DiagnosisResultType) {
   return lines.join('\n');
 }
 
-export default function DiagnosisTab({ factory, factorySites }: { factory: string; factorySites: FactorySite[] }) {
+interface DiagnosisTabProps {
+  factory: string;
+  factorySites: FactorySite[];
+  onFactoryChange: (factoryId: string) => void;
+}
+
+function formatHistoryTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+export default function DiagnosisTab({
+  factory,
+  factorySites,
+  onFactoryChange,
+}: DiagnosisTabProps) {
   const { toast, dismiss } = useToast();
   const toastRef = useRef<string | null>(null);
   const [sn, setSn] = useState('');
@@ -65,6 +126,10 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
   const [persistWarning, setPersistWarning] = useState('');
   const [progress, setProgress] = useState<{ stage: string; detail: string } | null>(null);
   const [streamingToken, setStreamingToken] = useState('');
+  const [skippedStages, setSkippedStages] = useState<Record<string, string>>({});
+  const [analysisFileCount, setAnalysisFileCount] = useState<number | null>(null);
+  const [promptDetails, setPromptDetails] = useState<PromptDetails | null>(null);
+  const [logComparisonSummaries, setLogComparisonSummaries] = useState<LogComparisonSummary[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const [historyId, setHistoryId] = useState<string | null>(null);
@@ -75,6 +140,7 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const requestIdRef = useRef(0);
+  const previousFactoryRef = useRef(factory);
 
   const factoryLabel = factorySites.find((f) => f.factory_id === factory)?.name ?? factory;
   const factoryReady = Boolean(factory);
@@ -103,6 +169,20 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
   useEffect(() => () => { abortRef.current?.abort(); }, []);
+  useEffect(() => {
+    const previousFactory = previousFactoryRef.current;
+    previousFactoryRef.current = factory;
+    if (!previousFactory || previousFactory === factory) return;
+    requestIdRef.current += 1;
+    setResult(null);
+    setError('');
+    setPersistWarning('');
+    setProgress(null);
+    setStreamingToken('');
+    setChatMessages([]);
+    setHistoryId(null);
+    setActiveHistoryId(null);
+  }, [factory]);
 
   const persistDiagnosis = useCallback(async (
     reqId: number,
@@ -151,6 +231,10 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
     setPersistWarning('');
     setResult(null);
     setProgress({ stage: 'device', detail: '正在查询设备信息...' });
+    setSkippedStages({});
+    setAnalysisFileCount(null);
+    setPromptDetails(null);
+    setLogComparisonSummaries([]);
     setStreamingToken('');
     setChatMessages([]);
     setHistoryId(null);
@@ -162,8 +246,46 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
     diagnosisApi.diagnoseBySNAnalyze(
       snVal,
       factory,
-      (stage, detail) => {
-        if (reqId === requestIdRef.current) setProgress({ stage, detail });
+      (stage, detail, status, meta) => {
+        if (reqId === requestIdRef.current) {
+          if (typeof meta.file_count === 'number') {
+            setAnalysisFileCount(meta.file_count);
+          }
+          if (meta.system_prompt !== undefined && meta.user_template !== undefined) {
+            setPromptDetails({
+              machineModel: meta.machine_model || 'default',
+              promptModel: meta.prompt_model || 'default',
+              systemPrompt: meta.system_prompt,
+              userTemplate: meta.user_template,
+            });
+          }
+          if (meta.log_comparison) {
+            const comparison = meta.log_comparison;
+            const nextSummary: LogComparisonSummary = {
+              testItem: comparison.test_item,
+              logPath: comparison.log_path,
+              originalLines: comparison.original_lines,
+              keptLines: comparison.kept_lines,
+              removedLines: comparison.removed_lines,
+              removalRate: comparison.removal_rate,
+              preprocessingApplied: comparison.preprocessing_applied,
+              recognizedLevelLines: comparison.recognized_level_lines,
+              anomalyEntries: comparison.anomaly_entries,
+              sourceSize: comparison.source_size,
+              downloadedSize: comparison.downloaded_size,
+              sourceLineCount: comparison.source_line_count,
+              sourceTruncated: comparison.source_truncated,
+            };
+            setLogComparisonSummaries((previous) => [
+              ...previous.filter((item) => item.logPath !== nextSummary.logPath),
+              nextSummary,
+            ]);
+          }
+          if (status === 'skipped') {
+            setSkippedStages((previous) => ({ ...previous, [stage]: detail }));
+          }
+          setProgress({ stage, detail });
+        }
       },
       controller.signal,
     ).then((res) => {
@@ -258,42 +380,51 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
     }
   };
 
+  const hasActiveWorkspace = loading || Boolean(error) || Boolean(result);
+  const currentStageIndex = progress?.stage ? SN_STAGES.indexOf(progress.stage as typeof SN_STAGES[number]) : 0;
+  const completedStageCount = Math.max(0, currentStageIndex);
+  const historyButton = (
+    <button
+      type="button"
+      onClick={() => setHistoryExpanded(true)}
+      className="inline-flex items-center gap-2 text-[11px] font-semibold hover:opacity-80"
+      style={{ color: 'var(--color-text-secondary)' }}
+    >
+      {historyLoading ? (
+        <>
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          历史记录加载中
+        </>
+      ) : (
+        <>
+          <Clock className="h-3.5 w-3.5" />
+          历史诊断
+          {historyTotal > 0 && ` ${historyTotal}`}
+          <ChevronRight className="h-3.5 w-3.5" />
+        </>
+      )}
+    </button>
+  );
+
   return (
     <div className="flex-1 flex flex-col min-h-0" style={{ backgroundColor: 'var(--color-bg-primary)' }}>
-      <DiagnosisInput
-        sn={sn}
-        factoryLabel={factoryLabel}
-        factoryReady={factoryReady}
-        onSnChange={setSn}
-        onDiagnose={handleDiagnose}
-        loading={loading}
-        onKeyDown={handleKeyDown}
-      />
+      {hasActiveWorkspace && (
+        <DiagnosisInput
+          sn={sn}
+          factory={factory}
+          factorySites={factorySites}
+          factoryReady={factoryReady}
+          onFactoryChange={onFactoryChange}
+          onSnChange={setSn}
+          onDiagnose={handleDiagnose}
+          loading={loading}
+          onKeyDown={handleKeyDown}
+        />
+      )}
 
-      {!loading && factoryReady && (
-        <div className="px-6 py-2 border-b shrink-0" style={{ borderColor: 'var(--color-border)' }}>
-          <button
-            type="button"
-            onClick={() => setHistoryExpanded(true)}
-            className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-widest hover:opacity-80 transition-opacity"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
-            {historyLoading ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                历史诊断记录 · 加载中…
-              </>
-            ) : (
-              <>
-                <Clock className="w-3.5 h-3.5" />
-                历史诊断记录
-                {historyTotal > 0
-                  ? `（${historyTotal > historyList.length ? `最近 ${historyList.length} / 共 ${historyTotal}` : historyTotal}）`
-                  : '（暂无）'}
-                <ChevronRight className="w-3.5 h-3.5" />
-              </>
-            )}
-          </button>
+      {!loading && factoryReady && hasActiveWorkspace && (
+        <div className="shrink-0 border-b px-6 py-2" style={{ borderColor: 'var(--color-border)' }}>
+          {historyButton}
         </div>
       )}
 
@@ -312,47 +443,108 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
 
       <div className="flex-1 flex min-h-0">
         {loading ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-3">
+          <div className="custom-scrollbar flex-1 overflow-y-auto px-4 py-7 sm:px-6 sm:py-9">
             <div
-              className="w-full max-w-lg rounded-2xl border shadow-sm overflow-hidden"
+              className="mx-auto w-full max-w-[760px] overflow-hidden rounded-lg border shadow-sm"
               style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
             >
               <div
-                className="px-5 py-3 border-b text-xs font-bold uppercase tracking-widest flex items-center justify-between"
-                style={{ color: 'var(--color-text-secondary)', borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}
+                className="flex items-start justify-between gap-4 border-b px-5 py-5 sm:px-6"
+                style={{ borderColor: 'var(--color-border)' }}
               >
-                <span>诊断分析进度</span>
+                <div className="flex min-w-0 items-start gap-3">
+                  <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-blue-600 text-white">
+                    <Activity className="h-4 w-4 animate-pulse" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="font-mono text-[15px] font-bold" style={{ color: 'var(--color-text-primary)' }}>{sn.trim()}</h2>
+                      <span className="rounded-sm px-2 py-0.5 text-[10px] font-bold" style={{ color: '#2563eb', backgroundColor: 'rgba(37,99,235,0.09)' }}>
+                        分析中
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>
+                      {factoryLabel} · {SN_STAGE_LABELS[progress?.stage ?? 'device']}
+                    </p>
+                  </div>
+                </div>
                 <button
+                  type="button"
                   onClick={handleCancel}
-                  className="text-[11px] font-bold px-2 py-1 rounded border normal-case tracking-normal"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border hover:bg-black/5"
                   style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }}
+                  aria-label="取消诊断"
+                  title="取消诊断"
                 >
-                  取消
+                  <Square className="h-3.5 w-3.5" fill="currentColor" />
                 </button>
               </div>
-              <div className="py-3">
+              <div className="border-b px-5 py-3 text-[11px] sm:px-6" style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)', backgroundColor: 'var(--color-bg-primary)' }}>
+                已完成 {completedStageCount} / {SN_STAGES.length} 个分析阶段
+              </div>
+              <div className="py-3 sm:px-2">
                 <ProgressIndicator
                   stages={[...SN_STAGES]}
-                  labels={SN_STAGE_LABELS}
+                  labels={{
+                    ...SN_STAGE_LABELS,
+                    ...(analysisFileCount !== null
+                      ? { log_download: `下载失败项原文日志（${analysisFileCount} 个文件）` }
+                      : {}),
+                  }}
                   currentStage={progress?.stage || null}
                   currentDetail={progress?.detail}
+                  skippedStages={skippedStages}
+                  stageDetails={{
+                    ...(promptDetails ? {
+                      prompt: [
+                        { label: '设备机型', value: promptDetails.machineModel },
+                        { label: '使用 Prompt', value: promptDetails.promptModel },
+                        { label: 'System Prompt', value: promptDetails.systemPrompt, multiline: true },
+                        { label: 'User Template', value: promptDetails.userTemplate, multiline: true },
+                      ],
+                    } : {}),
+                    ...(logComparisonSummaries.length > 0 ? {
+                      log_split: logComparisonSummaries.map((item) => ({
+                        label: item.testItem || item.logPath,
+                        value: item.sourceTruncated
+                          ? `源文件约 ${item.sourceLineCount ?? 0} 行 / ${Math.round((item.sourceSize ?? 0) / 1024)} KB，按头尾保留 ${Math.round((item.downloadedSize ?? 0) / 1024)} KB；采样内容 ${item.originalLines} 行，清洗后 ${item.keptLines} 行`
+                          : item.preprocessingApplied
+                            ? `原文件 ${item.originalLines} 行，清洗后 ${item.keptLines} 行，过滤 ${item.removedLines} 行（${(item.removalRate * 100).toFixed(1)}%）；识别 ${item.recognizedLevelLines} 个级别标记、${item.anomalyEntries} 个异常事件`
+                            : `原文件 ${item.originalLines} 行，未触发规则清洗，全文进入后续提取`,
+                      })),
+                    } : {}),
+                  }}
                   streamingText={progress?.stage === 'llm' ? streamingToken : undefined}
                 />
               </div>
             </div>
           </div>
         ) : error ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6">
-            <p className="text-sm text-red-500 text-center max-w-lg">{error}</p>
-            <SupportHint className="max-w-lg text-center justify-center" extra="详细说明见系统设置 → 使用文档" />
-            <button
-              onClick={handleDiagnose}
-              disabled={!factoryReady || !sn.trim()}
-              className="px-4 py-2 text-white rounded-lg text-sm font-bold shadow-sm disabled:opacity-50"
-              style={{ backgroundColor: 'var(--color-accent)' }}
+          <div className="custom-scrollbar flex-1 overflow-y-auto px-4 py-10 sm:px-6">
+            <section
+              className="mx-auto w-full max-w-[620px] rounded-lg border p-6 shadow-sm sm:p-8"
+              style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
             >
-              重试
-            </button>
+              <div className="flex items-start gap-4">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md" style={{ color: '#dc2626', backgroundColor: 'rgba(239,68,68,0.09)' }}>
+                  <AlertCircle className="h-5 w-5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-[15px] font-bold" style={{ color: 'var(--color-text-primary)' }}>诊断未完成</h2>
+                  <p className="mt-2 text-[13px] leading-6" style={{ color: '#dc2626' }}>{error}</p>
+                  <div className="mt-4"><SupportHint extra="详细说明见系统设置 → 使用文档" /></div>
+                  <button
+                    type="button"
+                    onClick={handleDiagnose}
+                    disabled={!factoryReady || !sn.trim()}
+                    className="mt-5 inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-4 text-[12px] font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    重新诊断
+                  </button>
+                </div>
+              </div>
+            </section>
           </div>
         ) : result ? (
           <div className="flex-1 flex min-h-0 flex-col">
@@ -362,8 +554,8 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
               </div>
             )}
             <div className="flex-1 flex min-h-0">
-              <div className="flex-1 flex min-h-0 relative">
-                <div className="flex-1 flex min-h-0">
+              <div className="relative flex min-h-0 flex-1 flex-col xl:flex-row">
+                <div className="flex min-h-0 min-w-0 flex-1">
                   <DiagnosisResult result={result} factory={factory} historyId={historyId} />
                 </div>
                 <DiagnosisChat messages={chatMessages} loading={chatLoading} onSend={handleChatSend} />
@@ -371,27 +563,148 @@ export default function DiagnosisTab({ factory, factorySites }: { factory: strin
             </div>
           </div>
         ) : (
-          <div className="flex-1 flex items-center justify-center p-6 min-h-[120px]">
-            <div className="max-w-md w-full text-center space-y-3">
-              <div
-                className="w-12 h-12 mx-auto rounded-xl flex items-center justify-center shadow-md"
-                style={{ background: 'linear-gradient(135deg, #3b82f6, #6366f1)' }}
-              >
-                <Bot className="w-6 h-6 text-white" />
+          <div className="custom-scrollbar flex-1 overflow-y-auto">
+            <div className="mx-auto min-h-full w-full max-w-[1080px] px-4 py-8 sm:px-6 sm:py-10 lg:px-8 lg:py-12">
+              <header className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
+                <div>
+                  <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase" style={{ color: 'var(--color-accent)' }}>
+                    <Activity className="h-3.5 w-3.5" />
+                    Single Device Diagnosis
+                  </div>
+                  <h2 className="text-[26px] font-bold sm:text-[30px]" style={{ color: 'var(--color-text-primary)', letterSpacing: 0 }}>
+                    定位一台设备，从 SN 开始
+                  </h2>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
+                  <span className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-secondary)' }}>
+                    <Building2 className="h-3.5 w-3.5" />
+                    {factoryLabel || '厂区加载中'}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-secondary)' }}>
+                    <SearchCheck className="h-3.5 w-3.5" />
+                    {SN_STAGES.length} 项分析流程
+                  </span>
+                </div>
+              </header>
+
+              <div className="space-y-6">
+                <section
+                  className="overflow-hidden rounded-lg border shadow-sm"
+                  style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
+                >
+                  <div className="flex items-center justify-between gap-4 border-b px-5 py-5 sm:px-8" style={{ borderColor: 'var(--color-border)' }}>
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-10 w-10 items-center justify-center rounded-md bg-blue-600 text-white">
+                        <Bot className="h-5 w-5" />
+                      </span>
+                      <div>
+                        <h3 className="text-[15px] font-bold" style={{ color: 'var(--color-text-primary)' }}>发起深度诊断</h3>
+                        <p className="mt-1 text-[12px]" style={{ color: 'var(--color-text-muted)' }}>当前厂区：{factoryLabel || '正在加载'}</p>
+                      </div>
+                    </div>
+                    <span className="hidden text-[10px] font-semibold sm:inline" style={{ color: 'var(--color-text-muted)' }}>AI ENGINE READY</span>
+                  </div>
+
+                  <div className="px-5 py-8 sm:px-8 sm:py-10 lg:px-10">
+                    <DiagnosisInput
+                      sn={sn}
+                      factory={factory}
+                      factorySites={factorySites}
+                      factoryReady={factoryReady}
+                      onFactoryChange={onFactoryChange}
+                      onSnChange={setSn}
+                      onDiagnose={handleDiagnose}
+                      loading={loading}
+                      onKeyDown={handleKeyDown}
+                      centered
+                    />
+                  </div>
+
+                  <div
+                    className="grid border-t sm:grid-cols-3"
+                    style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
+                  >
+                    {[
+                      { icon: Database, label: 'SIMS 测试数据' },
+                      { icon: FileSearch, label: '错误日志提取' },
+                      { icon: Cpu, label: 'AI 根因推理' },
+                    ].map(({ icon: Icon, label }, index) => (
+                      <div
+                        key={label}
+                        className={`flex items-center gap-2.5 px-5 py-4 text-[12px] sm:px-8 ${index > 0 ? 'border-t sm:border-l sm:border-t-0' : ''}`}
+                        style={{ borderColor: 'var(--color-border)' }}
+                      >
+                        <Icon className="h-3.5 w-3.5" style={{ color: 'var(--color-accent)' }} />
+                        {label}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section
+                  className="overflow-hidden rounded-lg border shadow-sm"
+                  style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
+                >
+                  <div className="flex h-[68px] items-center justify-between gap-3 border-b px-5 sm:px-8" style={{ borderColor: 'var(--color-border)' }}>
+                    <div className="flex items-center gap-2">
+                      <Clock className="h-4 w-4" style={{ color: 'var(--color-accent)' }} />
+                      <h3 className="text-[14px] font-bold" style={{ color: 'var(--color-text-primary)' }}>最近诊断</h3>
+                    </div>
+                    {historyTotal > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setHistoryExpanded(true)}
+                        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold hover:bg-black/5"
+                        style={{ color: 'var(--color-text-secondary)' }}
+                        aria-label="查看全部历史诊断"
+                        title="查看全部"
+                      >
+                        全部 {historyTotal}
+                        <ArrowUpRight className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="min-h-[116px]">
+                    {historyLoading ? (
+                      <div className="flex h-[116px] items-center justify-center gap-2 text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        加载中
+                      </div>
+                    ) : historyList.length === 0 ? (
+                      <div className="flex h-[116px] flex-col items-center justify-center px-6 text-center">
+                        <Clock className="mb-3 h-5 w-5" style={{ color: 'var(--color-text-muted)' }} />
+                        <p className="text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>当前厂区暂无诊断记录</p>
+                      </div>
+                    ) : (
+                      <div className="grid gap-px sm:grid-cols-2 xl:grid-cols-4" style={{ backgroundColor: 'var(--color-border)' }}>
+                        {historyList.slice(0, 4).map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => void handleHistoryClick(item)}
+                            className="group relative block min-h-[116px] w-full px-5 py-4 pr-10 text-left transition hover:brightness-[0.98] dark:hover:brightness-110 sm:px-6 sm:pr-10"
+                            style={{ backgroundColor: 'var(--color-bg-secondary)' }}
+                          >
+                            <span className="block text-[10px] font-semibold" style={{ color: 'var(--color-text-muted)' }}>
+                              设备 SN
+                            </span>
+                            <span className="mt-1 block whitespace-nowrap font-mono text-[12px] font-bold" style={{ color: 'var(--color-text-primary)' }}>
+                              {item.sn}
+                            </span>
+                            <span className="mt-3 flex items-center justify-between gap-2 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                              <span className="truncate">{item.category || '未分类'}</span>
+                              <span className="shrink-0">{formatHistoryTime(item.created_at)}</span>
+                            </span>
+                            <ChevronRight className="absolute right-4 top-[43px] h-4 w-4 opacity-50 transition-transform group-hover:translate-x-0.5" style={{ color: 'var(--color-text-muted)' }} />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                </section>
               </div>
-              <h2 className="text-base font-bold" style={{ color: 'var(--color-text-primary)' }}>
-                🤖 输入 SN 开始诊断
-              </h2>
-              {factoryReady ? (
-                <>
-                  <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-                    当前厂区：<span className="font-medium" style={{ color: 'var(--color-text-primary)' }}>{factoryLabel}</span>
-                    · 点击上方「历史诊断记录」查看历史记录
-                  </p>
-                </>
-              ) : (
-                <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>⏳ 厂区加载中…</p>
-              )}
             </div>
           </div>
         )}

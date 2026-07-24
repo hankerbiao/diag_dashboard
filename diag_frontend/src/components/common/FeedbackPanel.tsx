@@ -90,22 +90,22 @@ export default function FeedbackPanel({
 
   return (
     <div
-      className="mx-4 mb-3 px-4 py-2.5 rounded-lg border flex items-center gap-3"
+      className="mx-2 mb-2 flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 sm:mx-4 sm:mb-3 sm:flex-nowrap sm:gap-3 sm:px-4 sm:py-2.5"
       style={{
         backgroundColor: 'var(--color-bg-primary)',
         borderColor: 'var(--color-border)',
       }}
     >
-      <span className="text-[12px] shrink-0" style={{ color: 'var(--color-text-secondary)' }}>
-        帮助改进 AI 💡
+      <span className="hidden shrink-0 text-[12px] sm:inline" style={{ color: 'var(--color-text-secondary)' }}>
+        帮助改进 AI
       </span>
 
       {/* 评分按钮组 */}
-      <div className="flex items-center gap-1.5">
+      <div className="grid w-full grid-cols-3 items-center gap-1.5 sm:flex sm:w-auto">
         <button
           type="button"
           onClick={() => handleSelect('solved')}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] font-medium transition-all"
+          className="flex items-center justify-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium transition-all sm:px-2.5 sm:text-[12px]"
           style={{
             backgroundColor: selectedRating === 'solved' ? 'rgba(5, 150, 105, 0.15)' : 'rgba(5, 150, 105, 0.08)',
             border: `1px solid ${selectedRating === 'solved' ? 'rgba(5, 150, 105, 0.4)' : 'transparent'}`,
@@ -120,7 +120,7 @@ export default function FeedbackPanel({
         <button
           type="button"
           onClick={() => handleSelect('partially')}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] font-medium transition-all"
+          className="flex items-center justify-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium transition-all sm:px-2.5 sm:text-[12px]"
           style={{
             backgroundColor: selectedRating === 'partially' ? 'rgba(217, 119, 6, 0.15)' : 'rgba(217, 119, 6, 0.08)',
             border: `1px solid ${selectedRating === 'partially' ? 'rgba(217, 119, 6, 0.4)' : 'transparent'}`,
@@ -134,7 +134,7 @@ export default function FeedbackPanel({
         <button
           type="button"
           onClick={() => handleSelect('unsolved')}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] font-medium transition-all"
+          className="flex items-center justify-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium transition-all sm:px-2.5 sm:text-[12px]"
           style={{
             backgroundColor: selectedRating === 'unsolved' ? 'rgba(220, 38, 38, 0.15)' : 'rgba(220, 38, 38, 0.08)',
             border: `1px solid ${selectedRating === 'unsolved' ? 'rgba(220, 38, 38, 0.4)' : 'transparent'}`,
@@ -149,14 +149,14 @@ export default function FeedbackPanel({
 
       {/* 提示语 */}
       {!showComment && (
-        <span className="text-[11px] shrink-0" style={{ color: 'var(--color-text-muted)' }}>
+        <span className="hidden shrink-0 text-[11px] 2xl:inline" style={{ color: 'var(--color-text-muted)' }}>
           反馈越多，系统越懂您的问题
         </span>
       )}
 
       {/* 反馈输入框（需要时显示） */}
       {showComment && (
-        <div className="flex items-center gap-2 flex-1">
+        <div className="flex w-full flex-1 items-center gap-2 sm:w-auto">
           <input
             type="text"
             value={comment}

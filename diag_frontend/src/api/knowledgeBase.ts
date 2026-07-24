@@ -4,14 +4,45 @@ import type { KnowledgeDoc, GlobalAiConfig, MachineModelsResponse, LogExtraction
 
 export interface SearchReference { chunk_id: string; content: string; similarity: number; doc_name: string; }
 export interface KnowledgeSearchResult { references: SearchReference[]; }
+export interface AiConfigDraft {
+  api_key?: string;
+  base_url?: string;
+  model?: string;
+  temperature?: number;
+  max_tokens?: number;
+  chat_template_kwargs?: { enable_thinking: boolean };
+  timeout?: number;
+  extraction_api_key?: string;
+  extraction_base_url?: string;
+  extraction_model?: string;
+  extraction_max_tokens?: number;
+  extraction_timeout?: number;
+}
+export interface AiConnectivityResult {
+  service: 'answer' | 'extraction';
+  label: string;
+  success: boolean;
+  model: string;
+  base_url: string;
+  latency_ms?: number;
+  error?: string;
+  reused_answer?: boolean;
+}
 
 export const knowledgeBaseApi = {
-  async upload(file: File, title?: string, description?: string, tags?: string) {
+  async upload(
+    file: File,
+    title?: string,
+    description?: string,
+    tags?: string,
+    knowledgeType?: 'troubleshooting' | 'repair_case' | 'operation_guide' | 'faq',
+  ) {
     const formData = new FormData();
     formData.append('file', file);
     if (title) formData.append('title', title);
     if (description) formData.append('description', description);
     if (tags) formData.append('tags', tags);
+    if (knowledgeType) formData.append('knowledge_type', knowledgeType);
     const token = getAccessToken();
     const response = await fetch(`${API_BASE_URL}/api/knowledge-base/documents`, {
       method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: formData,
@@ -35,18 +66,26 @@ export const knowledgeBaseApi = {
   },
   async search(question: string) { return fetchApi<KnowledgeSearchResult>('/api/knowledge-base/search', { method: 'POST', body: JSON.stringify({ question }) }); },
   async getFormats() { return fetchApi<{ formats: string[] }>('/api/knowledge-base/formats'); },
-  async getRagflowStatus() { return fetchApi<{ enabled: boolean; dataset: { id: string; name: string; document_count: number; chunk_count: number } | null }>('/api/knowledge-base/ragflow/status'); },
+  async getRagflowStatus() {
+    type DatasetSummary = { id: string; name: string; document_count: number; chunk_count: number };
+    return fetchApi<{
+      enabled: boolean;
+      dataset: DatasetSummary | null;
+      datasets?: DatasetSummary[];
+    }>('/api/knowledge-base/ragflow/status');
+  },
 };
 
 export const settingsApi = {
   async getAiConfig() { return fetchApi<GlobalAiConfig>('/api/settings/ai-config'); },
-  async updateAiConfig(config: {
-    api_key?: string; base_url?: string; model?: string; temperature?: number; max_tokens?: number;
-    chat_template_kwargs?: { enable_thinking: boolean }; timeout?: number;
-    extraction_api_key?: string; extraction_base_url?: string; extraction_model?: string;
-    extraction_max_tokens?: number; extraction_timeout?: number;
-  }) {
+  async updateAiConfig(config: AiConfigDraft) {
     return fetchApi<void>('/api/settings/ai-config', { method: 'PUT', body: JSON.stringify(config) });
+  },
+  async testAiConfig(config: AiConfigDraft) {
+    return fetchApi<{ all_connected: boolean; results: AiConnectivityResult[] }>(
+      '/api/settings/ai-config/test',
+      { method: 'POST', body: JSON.stringify(config) },
+    );
   },
   async getMachineModels() { return fetchApi<MachineModelsResponse>('/api/settings/machine-models'); },
   async getExtractionPrompts() { return fetchApi<LogExtractionPromptsResponse>('/api/settings/log-extraction/prompts'); },

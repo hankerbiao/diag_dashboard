@@ -1,8 +1,33 @@
 import { fetchApi, API_BASE_URL, type ApiResponse } from './fetch';
 import { getAccessToken } from './auth';
 import type {
-  DiagnosisResult, DiagnosisCache, ErrorAnalysis, SnHistoryItem, SnHistoryDetail
+  DiagnosisResult, DiagnosisCache, ErrorAnalysis, SnHistoryItem, SnHistoryDetail,
+  DiagnosisRating, FeedbackListResponse, FeedbackStatus,
 } from './types';
+
+export interface DiagnosisProgressMeta {
+  file_count?: number;
+  machine_model?: string;
+  prompt_model?: string;
+  system_prompt?: string;
+  user_template?: string;
+  log_comparison?: {
+    test_item: string;
+    log_path: string;
+    original_lines: number;
+    kept_lines: number;
+    removed_lines: number;
+    removal_rate: number;
+    preprocessing_applied: boolean;
+    recognized_level_lines: number;
+    anomaly_entries: number;
+    source_size?: number;
+    downloaded_size?: number;
+    source_line_count?: number;
+    source_truncated?: boolean;
+    truncation_strategy?: string;
+  };
+}
 
 export const diagnosisApi = {
   async diagnoseBySN(sn: string, factory: string) {
@@ -18,7 +43,12 @@ export const diagnosisApi = {
   async diagnoseBySNAnalyze(
     sn: string,
     factory: string,
-    onProgress?: (stage: string, detail: string) => void,
+    onProgress?: (
+      stage: string,
+      detail: string,
+      status: 'running' | 'skipped',
+      meta: DiagnosisProgressMeta,
+    ) => void,
     signal?: AbortSignal,
   ): Promise<ApiResponse<DiagnosisResult>> {
     const token = getAccessToken();
@@ -57,11 +87,18 @@ export const diagnosisApi = {
           type: 'progress' | 'result' | 'error';
           stage?: string;
           detail?: string;
+          status?: 'running' | 'skipped';
+          meta?: DiagnosisProgressMeta;
           data?: DiagnosisResult;
           error?: string;
         };
         if (event.type === 'progress') {
-          onProgress?.(event.stage ?? '', event.detail ?? '');
+          onProgress?.(
+            event.stage ?? '',
+            event.detail ?? '',
+            event.status ?? 'running',
+            event.meta ?? {},
+          );
         } else if (event.type === 'result' && event.data) {
           return { success: true, data: event.data };
         } else if (event.type === 'error') {
@@ -137,5 +174,40 @@ export const diagnosisApi = {
       method: 'POST',
       body: JSON.stringify(params),
     });
+  },
+  async getFeedbackList(params: {
+    factory?: string;
+    rating?: DiagnosisRating | '';
+    status?: FeedbackStatus | '';
+    keyword?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params.factory) query.set('factory', params.factory);
+    if (params.rating) query.set('rating', params.rating);
+    if (params.status) query.set('status', params.status);
+    if (params.keyword) query.set('keyword', params.keyword);
+    if (params.page) query.set('page', String(params.page));
+    if (params.limit) query.set('limit', String(params.limit));
+    return fetchApi<FeedbackListResponse>(`/api/diagnosis/feedback?${query.toString()}`);
+  },
+  async updateFeedback(
+    feedbackId: string,
+    params: { status: FeedbackStatus; resolution_note?: string },
+  ) {
+    return fetchApi<import('./types').DiagnosisFeedback>(
+      `/api/diagnosis/feedback/${encodeURIComponent(feedbackId)}`,
+      { method: 'PATCH', body: JSON.stringify(params) },
+    );
+  },
+  async linkFeedbackKnowledge(
+    feedbackId: string,
+    params: { document_ids: string[]; knowledge_title: string },
+  ) {
+    return fetchApi<import('./types').DiagnosisFeedback>(
+      `/api/diagnosis/feedback/${encodeURIComponent(feedbackId)}/knowledge`,
+      { method: 'POST', body: JSON.stringify(params) },
+    );
   },
 };

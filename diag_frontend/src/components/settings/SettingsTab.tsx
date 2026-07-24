@@ -40,30 +40,29 @@ export default function SettingsTab() {
       className="flex-1 overflow-y-auto custom-scrollbar"
       style={{ backgroundColor: 'var(--color-bg-primary)' }}
     >
-      <div className="mx-auto w-full max-w-6xl px-5 py-6 lg:px-8 lg:py-8">
+      <div className="mx-auto w-full max-w-[1400px] px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
         <div
-          className="sticky top-0 z-10 -mx-5 mb-6 border-b px-5 py-4 backdrop-blur lg:-mx-8 lg:px-8"
+          className="mb-7 border-b pb-5"
           style={{
-            backgroundColor: 'color-mix(in srgb, var(--color-bg-primary) 88%, transparent)',
             borderColor: 'var(--color-border)',
           }}
         >
-          <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex w-full flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <Settings className="h-5 w-5 shrink-0" style={{ color: 'var(--color-accent)' }} />
-                <h1 className="text-lg font-bold" style={{ color: 'var(--color-text-primary)' }}>
-                  系统设置
+                <h1 className="text-xl font-bold" style={{ color: 'var(--color-text-primary)' }}>
+                  系统管理与 AI 引擎配置
                 </h1>
               </div>
-              <p className="mt-1 text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-                管理 AI 模型、日志提取 Prompt 与操作文档。
+              <p className="mt-2 max-w-2xl text-sm leading-6" style={{ color: 'var(--color-text-secondary)' }}>
+                统一管理诊断模型、日志提取模型，以及不同机型对应的日志解析 Prompt。
               </p>
             </div>
             <button
               onClick={handleSave}
               disabled={saving}
-              className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg px-4 text-sm font-bold text-white shadow-sm transition active:scale-[0.98] disabled:opacity-60"
+              className="inline-flex h-10 w-full shrink-0 items-center justify-center gap-2 rounded-lg px-4 text-sm font-bold text-white shadow-sm transition active:scale-[0.98] disabled:opacity-60 sm:w-auto"
               style={{
                 backgroundColor: 'var(--color-accent)',
                 boxShadow: '0 4px 10px -4px var(--color-shadow)',
@@ -75,7 +74,7 @@ export default function SettingsTab() {
           </div>
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
+        <div className="grid min-w-0 gap-6 2xl:grid-cols-[minmax(0,1fr)_300px]">
           <div className="min-w-0 space-y-6">
             <ApiConfig
               ref={apiConfigRef}
@@ -89,7 +88,7 @@ export default function SettingsTab() {
             />
           </div>
 
-          <aside className="space-y-4 lg:sticky lg:top-28 lg:self-start">
+          <aside className="grid gap-4 md:grid-cols-2 2xl:sticky 2xl:top-6 2xl:block 2xl:space-y-4 2xl:self-start">
             <section
               className="rounded-lg border p-5"
               style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}

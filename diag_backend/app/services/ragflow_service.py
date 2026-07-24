@@ -11,6 +11,12 @@ logger = logging.getLogger(__name__)
 RAGFLOW_DEFAULT_DATASET_NAME = "weaveeye-knowledge-base"
 RAGFLOW_DEFAULT_CHAT_NAME = "WeaveEye-Diagnosis"
 RAGFLOW_STATUS_MAP = {"UNSTART": "queued", "RUNNING": "parsing", "DONE": "parsed", "FAIL": "failed"}
+RAGFLOW_KNOWLEDGE_TYPE_DESCRIPTIONS = {
+    "troubleshooting": "WeaveEye 故障排查知识库",
+    "repair_case": "WeaveEye 维修案例知识库",
+    "operation_guide": "WeaveEye 操作规范知识库",
+    "faq": "WeaveEye 常见问答知识库",
+}
 
 # 超时配置
 T_SHORT, T_MEDIUM, T_LONG = 15, 30, 120
@@ -46,8 +52,12 @@ async def _client(timeout: int = T_SHORT):
     try:
         async with httpx.AsyncClient(timeout=timeout) as c:
             yield c
-    except Exception as e:
-        logger.debug("RAGFlow _client HTTP 异常", extra={"error": str(e), "error_type": type(e).__name__, "timeout": timeout}, exc_info=True)
+    except httpx.HTTPError as e:
+        logger.warning(
+            "RAGFlow HTTP 请求失败: %s",
+            e,
+            extra={"error_type": type(e).__name__, "timeout": timeout},
+        )
         raise
 
 
@@ -193,38 +203,51 @@ async def search_knowledge_base(
             extra={"ragflow_api_url_set": bool(url), "ragflow_api_key_set": bool(key)},
         )
         return {"references": []}
-    dataset_id = await resolve_default_dataset()
-    if not dataset_id:
-        logger.debug("RAGFlow 默认数据集未找到，跳过检索")
+    dataset_ids = await resolve_retrieval_dataset_ids()
+    if not dataset_ids:
+        logger.debug("RAGFlow 检索数据集未找到，跳过检索")
         return {"references": []}
 
-    logger.debug("RAGFlow 开始请求 retrieval API", extra={"dataset_id": dataset_id, "url": _cfg()[0]})
+    logger.debug(
+        "RAGFlow 开始请求 retrieval API",
+        extra={"dataset_ids": dataset_ids, "dataset_count": len(dataset_ids), "url": _cfg()[0]},
+    )
     try:
         async with _client(T_MEDIUM) as c:
             if c is None:
                 logger.debug("RAGFlow HTTP 客户端创建失败 (_client 返回 None)")
                 return {"references": []}
             resp = await c.post(f"{_cfg()[0]}/api/v1/retrieval", headers=_hdrs(), json={
-                "question": question, "dataset_ids": [dataset_id],
+                "question": question, "dataset_ids": dataset_ids,
                 "similarity_threshold": similarity_threshold, "vector_similarity_weight": vector_similarity_weight, "top_k": top_k,
             })
             logger.debug(
                 "RAGFlow retrieval API 响应",
                 extra={"status_code": resp.status_code, "body_preview": resp.text[:500]},
             )
+            resp.raise_for_status()
             result = resp.json()
             if result.get("code", -1) != 0:
-                err_msg = f"RAGFlow 检索错误: {result.get('message', result.get('msg', '未知错误'))}"
-                logger.debug("RAGFlow retrieval API 返回业务错误", extra={"code": result.get("code"), "message": result.get("message"), "msg": result.get("msg")})
-                raise RuntimeError(err_msg)
+                detail = result.get("message", result.get("msg", "未知错误"))
+                logger.warning(
+                    "RAGFlow retrieval API 返回业务错误: code=%s, detail=%s",
+                    result.get("code"),
+                    detail,
+                )
+                return {
+                    "references": [],
+                    "warning": f"知识库检索暂不可用: {detail}",
+                }
 
             data = result.get("data", {})
             chunks = data.get("chunks", [])
             doc_map = {d.get("doc_id", ""): d.get("doc_name", "") for d in data.get("doc_aggs", []) if d.get("doc_id")}
             logger.debug("RAGFlow 检索成功", extra={"chunks_count": len(chunks), "docs_count": len(doc_map)})
-    except Exception as e:
-        logger.debug("RAGFlow search_knowledge_base 异常", extra={"error": str(e), "error_type": type(e).__name__}, exc_info=True)
-        raise
+    except httpx.HTTPError as e:
+        return {"references": [], "warning": f"知识库连接失败: {e}"}
+    except (AttributeError, TypeError, ValueError) as e:
+        logger.warning("RAGFlow retrieval API 响应解析失败: %s", e)
+        return {"references": [], "warning": "知识库返回了无法解析的响应"}
 
     return {"references": [{
         "chunk_id": c.get("id", ""), "content": c.get("content", ""),
@@ -252,6 +275,41 @@ async def chat_completion(chat_id: str, question: str, stream: bool = False) -> 
 
 _default_dataset_id: Optional[str] = None
 _default_chat_id: Optional[str] = None
+_dataset_ids_by_name: dict[str, str] = {}
+
+
+def knowledge_dataset_names() -> dict[str, str]:
+    """返回知识类型对应的数据集名称，允许通过环境变量覆盖。"""
+    settings = get_settings()
+    return {
+        "troubleshooting": settings.ragflow_troubleshooting_dataset,
+        "repair_case": settings.ragflow_repair_case_dataset,
+        "operation_guide": settings.ragflow_operation_guide_dataset,
+        "faq": settings.ragflow_faq_dataset,
+    }
+
+
+async def resolve_dataset(dataset_name: str, description: str = "") -> str:
+    """按名称解析数据集，不存在时创建，并缓存其 ID。"""
+    normalized_name = dataset_name.strip()
+    if not _ok() or not normalized_name:
+        return ""
+    cached_id = _dataset_ids_by_name.get(normalized_name)
+    if cached_id:
+        return cached_id
+
+    datasets = await list_datasets(page_size=200)
+    for dataset in datasets:
+        if dataset.get("name") == normalized_name and dataset.get("id"):
+            dataset_id = str(dataset["id"])
+            _dataset_ids_by_name[normalized_name] = dataset_id
+            return dataset_id
+
+    result = await create_dataset(name=normalized_name, description=description)
+    dataset_id = str(result.get("id") or "")
+    if dataset_id:
+        _dataset_ids_by_name[normalized_name] = dataset_id
+    return dataset_id
 
 
 async def resolve_default_dataset() -> str:
@@ -260,21 +318,42 @@ async def resolve_default_dataset() -> str:
         logger.debug("resolve_default_dataset: 使用缓存或未配置", extra={"_ok": _ok() if not _default_dataset_id else True, "cached_id": _default_dataset_id})
         return _default_dataset_id or ""
 
-    cfg_name = get_settings().ragflow_default_dataset or RAGFLOW_DEFAULT_DATASET_NAME
-    logger.debug("resolve_default_dataset: 开始查找数据集", extra={"dataset_name": cfg_name})
-    datasets = await list_datasets(page_size=200)
-    logger.debug("resolve_default_dataset: 获取到数据集列表", extra={"count": len(datasets)})
-    for ds in datasets:
-        if ds.get("name") == cfg_name:
-            _default_dataset_id = ds.get("id")
-            logger.debug("resolve_default_dataset: 找到数据集", extra={"dataset_id": _default_dataset_id, "ds_name": cfg_name})
-            return _default_dataset_id
-
-    logger.debug("resolve_default_dataset: 数据集不存在，尝试创建", extra={"ds_name": cfg_name})
-    result = await create_dataset(name=cfg_name, description="WeaveEye 智能诊断系统默认知识库")
-    _default_dataset_id = result.get("id")
-    logger.debug("resolve_default_dataset: 创建结果", extra={"result": str(result)[:300], "dataset_id": _default_dataset_id})
+    dataset_name = get_settings().ragflow_default_dataset or RAGFLOW_DEFAULT_DATASET_NAME
+    _default_dataset_id = await resolve_dataset(
+        dataset_name,
+        description="WeaveEye 智能诊断系统默认知识库",
+    )
+    logger.debug(
+        "resolve_default_dataset: 解析完成",
+        extra={"dataset_name": dataset_name, "dataset_id": _default_dataset_id},
+    )
     return _default_dataset_id
+
+
+async def resolve_knowledge_dataset(knowledge_type: str = "") -> str:
+    """按知识类型选择上传数据集；未指定类型时回退默认数据集。"""
+    normalized_type = knowledge_type.strip()
+    dataset_name = knowledge_dataset_names().get(normalized_type, "")
+    if not dataset_name:
+        return await resolve_default_dataset()
+    return await resolve_dataset(
+        dataset_name,
+        description=RAGFLOW_KNOWLEDGE_TYPE_DESCRIPTIONS[normalized_type],
+    )
+
+
+async def resolve_retrieval_dataset_ids() -> list[str]:
+    """解析检索使用的默认数据集和所有已经创建的类型数据集。"""
+    default_id = await resolve_default_dataset()
+    dataset_ids = [default_id] if default_id else []
+    configured_names = set(knowledge_dataset_names().values())
+    for dataset in await list_datasets(page_size=200):
+        dataset_id = str(dataset.get("id") or "")
+        dataset_name = str(dataset.get("name") or "")
+        if dataset_id and dataset_name in configured_names and dataset_id not in dataset_ids:
+            _dataset_ids_by_name[dataset_name] = dataset_id
+            dataset_ids.append(dataset_id)
+    return dataset_ids
 
 
 async def resolve_default_chat() -> str:
@@ -282,18 +361,18 @@ async def resolve_default_chat() -> str:
     if not _ok() or _default_chat_id:
         return _default_chat_id or ""
 
-    dataset_id = await resolve_default_dataset()
-    if not dataset_id:
+    dataset_ids = await resolve_retrieval_dataset_ids()
+    if not dataset_ids:
         return ""
 
     for c in await list_chats(page_size=200):
         if c.get("name") == RAGFLOW_DEFAULT_CHAT_NAME:
             _default_chat_id = c.get("id")
-            if dataset_id not in c.get("dataset_ids", []):
-                await update_chat(_default_chat_id, [dataset_id])
+            if set(dataset_ids) != set(c.get("dataset_ids", [])):
+                await update_chat(_default_chat_id, dataset_ids)
             return _default_chat_id
 
-    result = await create_chat(name=RAGFLOW_DEFAULT_CHAT_NAME, dataset_ids=[dataset_id])
+    result = await create_chat(name=RAGFLOW_DEFAULT_CHAT_NAME, dataset_ids=dataset_ids)
     _default_chat_id = result.get("id")
     return _default_chat_id
 

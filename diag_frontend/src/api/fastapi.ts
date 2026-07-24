@@ -7,10 +7,18 @@ export type {
   PaginatedResponse,
   FaultCategoryItem, YieldTrendItem, StationFailureItem, DecisionDistributionItem,
   ModelDefectItem, DashboardInsights, KnowledgeDoc, GlobalAiConfig,
-  DiagnosisFeedback, DiagnosisFeedbackParams, DiagnosisRating,
+  DiagnosisFeedback, DiagnosisFeedbackParams, DiagnosisRating, FeedbackStatus,
+  FeedbackSummary, FeedbackListResponse,
   LogExtractionPrompt, MachineModelsResponse, LogExtractionPromptsResponse
 } from './types';
 export { diagnosisApi } from './diagnosis';
 export { factoryApi, syncApi } from './sync';
 export { analyticsApi } from './analytics';
-export { knowledgeBaseApi, settingsApi, type SearchReference, type KnowledgeSearchResult } from './knowledgeBase';
+export {
+  knowledgeBaseApi,
+  settingsApi,
+  type AiConfigDraft,
+  type AiConnectivityResult,
+  type KnowledgeSearchResult,
+  type SearchReference,
+} from './knowledgeBase';

@@ -64,6 +64,19 @@ class GlobalAiConfigUpdateRequest(BaseModel):
     extraction_timeout: Optional[int] = None
 
 
+class AiModelConnectivityTestRequest(BaseModel):
+    """使用未保存的表单配置测试 OpenAI 兼容模型服务。"""
+
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    timeout: Optional[int] = Field(None, ge=3, le=3600)
+    extraction_api_key: Optional[str] = None
+    extraction_base_url: Optional[str] = None
+    extraction_model: Optional[str] = None
+    extraction_timeout: Optional[int] = Field(None, ge=3, le=3600)
+
+
 class LogExtractionPromptRequest(BaseModel):
     """按机型配置的错误日志提取 prompt。model="default" 表示默认 prompt。"""
     model: str = Field(..., min_length=1)
@@ -134,3 +147,33 @@ class DiagnosisFeedbackRequest(BaseModel):
     @classmethod
     def strip_whitespace(cls, v: str) -> str:
         return v.strip()
+
+
+class DiagnosisFeedbackStatusRequest(BaseModel):
+    """反馈处理状态更新请求。"""
+
+    status: Literal["pending", "processing", "resolved", "ignored"]
+    resolution_note: Optional[str] = Field(None, max_length=2000)
+
+
+class DiagnosisFeedbackKnowledgeRequest(BaseModel):
+    """反馈补充到知识库后的文档关联信息。"""
+
+    document_ids: list[str] = Field(..., min_length=1, max_length=20)
+    knowledge_title: str = Field(..., min_length=1, max_length=200)
+
+    @field_validator("document_ids")
+    @classmethod
+    def normalize_document_ids(cls, values: list[str]) -> list[str]:
+        document_ids = list(dict.fromkeys(value.strip() for value in values if value.strip()))
+        if not document_ids:
+            raise ValueError("document_ids 至少包含一个有效文档 ID")
+        return document_ids
+
+    @field_validator("knowledge_title")
+    @classmethod
+    def normalize_knowledge_title(cls, value: str) -> str:
+        title = value.strip()
+        if not title:
+            raise ValueError("knowledge_title 不能为空")
+        return title

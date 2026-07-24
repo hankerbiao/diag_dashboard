@@ -28,19 +28,19 @@ logger = logging.getLogger(__name__)
 
 # 日志级别标记
 LOG_LEVEL_PATTERNS = [
-    re.compile(r'\bFATAL\b'),
-    re.compile(r'\bCRITICAL\b'),
-    re.compile(r'\bERROR\b'),
-    re.compile(r'\bWARN(?:ING)?\b'),
+    re.compile(r'\bFATAL\b', re.IGNORECASE),
+    re.compile(r'\bCRITICAL\b', re.IGNORECASE),
+    re.compile(r'\bERROR\b', re.IGNORECASE),
+    re.compile(r'\bWARN(?:ING)?\b', re.IGNORECASE),
 ]
 
 # 明确的失败/异常关键字
 FAILURE_PATTERNS = [
-    re.compile(r'\bFAIL(?:ED|URE)?\b'),
-    re.compile(r'\bException\b'),
-    re.compile(r'\bError\b'),           # 大写 Error 如 "RuntimeError", "Error code"
-    re.compile(r'\bTraceback\b'),
-    re.compile(r'\bnon-zero\b'),
+    re.compile(r'\bFAIL(?:ED|URE)?\b', re.IGNORECASE),
+    re.compile(r'\bException\b', re.IGNORECASE),
+    re.compile(r'\bError\b', re.IGNORECASE),
+    re.compile(r'\bTraceback\b', re.IGNORECASE),
+    re.compile(r'\bnon-zero\b', re.IGNORECASE),
     re.compile(r'\babort(?:ed|ing)?\b', re.IGNORECASE),
     re.compile(r'\bpanic\b', re.IGNORECASE),
 ]
@@ -187,6 +187,12 @@ class ContextExtractor:
         if custom_patterns:
             patterns = patterns + custom_patterns
 
+        # 延迟导入，避免 log_processing 包入口与编码级回退之间形成初始化循环。
+        from .log_processing.preprocessor import (
+            BENIGN_ANOMALY_PATTERN,
+            is_strong_anomaly_line,
+        )
+
         lines = log_text.splitlines()
         total_lines = len(lines)
         if total_lines == 0:
@@ -204,6 +210,8 @@ class ContextExtractor:
             for pat in patterns:
                 m = pat.search(line)
                 if m:
+                    if BENIGN_ANOMALY_PATTERN.search(line) and not is_strong_anomaly_line(line):
+                        continue
                     matched_indices.add(i)
                     error_markers.append({
                         "line_idx": i,

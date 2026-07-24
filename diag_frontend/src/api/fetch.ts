@@ -1,6 +1,8 @@
 import { getAccessToken } from './auth';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+// Empty means same-origin. In development Vite proxies /api to the backend,
+// which keeps remote browser access independent from backend CORS settings.
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
 export interface ApiResponse<T> {
   success: boolean;

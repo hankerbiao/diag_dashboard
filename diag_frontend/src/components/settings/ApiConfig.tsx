@@ -1,6 +1,6 @@
 import { useState, useEffect, useImperativeHandle, forwardRef, type ReactNode } from 'react';
-import { Sliders, Key, Loader2, Brain, Clock, Zap, Thermometer, Hash, Link2 } from 'lucide-react';
-import { settingsApi } from '../../api/fastapi';
+import { Activity, Brain, CheckCircle2, Clock, Key, Link2, Loader2, Sliders, Thermometer, XCircle, Zap } from 'lucide-react';
+import { settingsApi, type AiConfigDraft, type AiConnectivityResult } from '../../api/fastapi';
 
 export interface ApiConfigHandle {
   save: () => Promise<boolean>;
@@ -92,7 +92,7 @@ function NumberField({ label, value, onChange, placeholder, min = 1, icon }: Num
 
 function SectionTitle({ icon, title, description, badge }: { icon: ReactNode; title: string; description: string; badge?: string }) {
   return (
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <span style={{ color: 'var(--color-accent)' }}>{icon}</span>
@@ -106,7 +106,7 @@ function SectionTitle({ icon, title, description, badge }: { icon: ReactNode; ti
       </div>
       {badge && (
         <span
-          className="w-fit rounded-full border px-2.5 py-1 text-[11px] font-bold"
+          className="w-fit shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-bold"
           style={{ color: 'var(--color-accent)', borderColor: 'var(--color-accent)', backgroundColor: 'var(--color-accent-light)' }}
         >
           {badge}
@@ -122,17 +122,17 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
     const [baseUrl, setBaseUrl] = useState('');
     const [model, setModel] = useState('');
     const [temperature, setTemperature] = useState<number | null>(null);
-    const [maxTokens, setMaxTokens] = useState<number | null>(null);
     const [enableThinking, setEnableThinking] = useState(false);
     const [timeout, setTimeout_] = useState<number | null>(null);
     const [extractionApiKey, setExtractionApiKey] = useState('');
     const [extractionBaseUrl, setExtractionBaseUrl] = useState('');
     const [extractionModel, setExtractionModel] = useState('');
-    const [extractionMaxTokens, setExtractionMaxTokens] = useState<number | null>(null);
     const [extractionTimeout, setExtractionTimeout] = useState<number | null>(null);
 
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [testing, setTesting] = useState(false);
+    const [testResults, setTestResults] = useState<AiConnectivityResult[]>([]);
 
     useEffect(() => {
       settingsApi.getAiConfig().then((resp) => {
@@ -141,13 +141,11 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
           setBaseUrl(resp.data.base_url || '');
           setModel(resp.data.model || '');
           setTemperature(resp.data.temperature);
-          setMaxTokens(resp.data.max_tokens);
           setEnableThinking(resp.data.chat_template_kwargs?.enable_thinking ?? false);
           setTimeout_(resp.data.timeout);
           setExtractionApiKey(resp.data.extraction_api_key || '');
           setExtractionBaseUrl(resp.data.extraction_base_url || '');
           setExtractionModel(resp.data.extraction_model || '');
-          setExtractionMaxTokens(resp.data.extraction_max_tokens);
           setExtractionTimeout(resp.data.extraction_timeout);
         }
       }).catch(() => {
@@ -155,26 +153,50 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
       }).finally(() => setLoading(false));
     }, [onErrorMessage]);
 
+    const buildConfigDraft = (): AiConfigDraft => {
+      const body: AiConfigDraft = {
+        api_key: apiKey,
+        base_url: baseUrl,
+        model,
+        chat_template_kwargs: { enable_thinking: enableThinking },
+        extraction_api_key: extractionApiKey,
+        extraction_base_url: extractionBaseUrl,
+        extraction_model: extractionModel,
+      };
+      if (temperature !== null) body.temperature = temperature;
+      if (timeout !== null) body.timeout = timeout;
+      if (extractionTimeout !== null) body.extraction_timeout = extractionTimeout;
+      return body;
+    };
+
+    const handleTestConnection = async () => {
+      if (testing) return;
+      setTesting(true);
+      setTestResults([]);
+      try {
+        const resp = await settingsApi.testAiConfig(buildConfigDraft());
+        if (!resp.success || !resp.data) {
+          onErrorMessage?.(resp.error || '模型连接测试失败');
+          return;
+        }
+        setTestResults(resp.data.results);
+        if (resp.data.all_connected) {
+          onSuccessMessage?.('模型服务连接正常');
+        } else {
+          onErrorMessage?.('部分模型服务连接失败，请检查测试结果');
+        }
+      } catch {
+        onErrorMessage?.('网络错误，无法测试模型连接');
+      } finally {
+        setTesting(false);
+      }
+    };
+
     useImperativeHandle(ref, () => ({
       save: async () => {
         setSaving(true);
         try {
-          const body: Record<string, unknown> = {
-            api_key: apiKey,
-            base_url: baseUrl,
-            model,
-            chat_template_kwargs: { enable_thinking: enableThinking },
-          };
-          if (temperature !== null) body.temperature = temperature;
-          if (maxTokens !== null) body.max_tokens = maxTokens;
-          if (timeout !== null) body.timeout = timeout;
-          body.extraction_api_key = extractionApiKey;
-          body.extraction_base_url = extractionBaseUrl;
-          body.extraction_model = extractionModel;
-          if (extractionMaxTokens !== null) body.extraction_max_tokens = extractionMaxTokens;
-          if (extractionTimeout !== null) body.extraction_timeout = extractionTimeout;
-
-          const resp = await settingsApi.updateAiConfig(body as any);
+          const resp = await settingsApi.updateAiConfig(buildConfigDraft());
           if (resp.success) {
             onSuccessMessage?.('AI 大模型配置已更新');
             return true;
@@ -211,7 +233,7 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
         className="overflow-hidden rounded-lg border"
         style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}
       >
-        <div className="flex flex-col gap-3 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between" style={{ borderColor: 'var(--color-border)' }}>
+        <div className="flex flex-col gap-3 border-b px-4 py-4 sm:px-5 md:flex-row md:items-center md:justify-between" style={{ borderColor: 'var(--color-border)' }}>
           <div>
             <div className="flex items-center gap-2">
               <Sliders className="h-5 w-5" style={{ color: 'var(--color-accent)' }} />
@@ -223,15 +245,50 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
               主模型负责诊断结论，提取模型负责日志预处理。
             </p>
           </div>
-          {saving && (
-            <span className="inline-flex items-center gap-2 text-xs font-bold" style={{ color: 'var(--color-accent)' }}>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              保存中
-            </span>
-          )}
+          <div className="flex shrink-0 items-center gap-3">
+            {saving && (
+              <span className="inline-flex items-center gap-2 text-xs font-bold" style={{ color: 'var(--color-accent)' }}>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                保存中
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => void handleTestConnection()}
+              disabled={testing || saving}
+              className="inline-flex h-9 items-center gap-2 rounded-md border px-3 text-xs font-bold disabled:opacity-50"
+              style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)', color: 'var(--color-text-secondary)' }}
+            >
+              {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
+              {testing ? '正在测试' : '测试模型连接'}
+            </button>
+          </div>
         </div>
 
-        <div className="space-y-6 p-5">
+        {testResults.length > 0 && (
+          <div className="grid border-b sm:grid-cols-2" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}>
+            {testResults.map((result) => (
+              <div key={result.service} className="flex min-w-0 items-start gap-3 border-b px-5 py-3 last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0" style={{ borderColor: 'var(--color-border)' }}>
+                {result.success
+                  ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                  : <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-bold">
+                    <span>{result.label}</span>
+                    {result.reused_answer && <span className="text-[10px] font-normal" style={mutedStyle}>复用主模型</span>}
+                    {result.success && result.latency_ms !== undefined && <span className="font-mono text-[10px] text-emerald-600">{result.latency_ms} ms</span>}
+                  </div>
+                  <div className="mt-1 truncate font-mono text-[10px]" style={mutedStyle} title={`${result.model} · ${result.base_url}`}>
+                    {result.model || '未配置模型'} · {result.base_url || '未配置地址'}
+                  </div>
+                  {!result.success && <div className="mt-1 break-words text-[10px] text-red-600">{result.error || '连接失败'}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="space-y-7 p-4 sm:p-5">
           <div className="space-y-4">
             <SectionTitle
               icon={<Brain className="h-4 w-4" />}
@@ -239,7 +296,7 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
               description="建议选择推理能力更强的模型，用于根因分析和维修建议生成。"
               badge="OpenAI 兼容"
             />
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
               <TextField label="Base URL" value={baseUrl} onChange={setBaseUrl} placeholder="https://api.openai.com/v1" icon={<Link2 className="h-4 w-4" />} />
               <TextField label="API Key" value={apiKey} onChange={setApiKey} placeholder="sk-xxxxxxxx" type="password" icon={<Key className="h-4 w-4" />} />
               <TextField label="Model ID" value={model} onChange={setModel} placeholder="deepseek-reasoner" />
@@ -253,21 +310,19 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
               description="留空时复用诊断回答模型，单模型部署时无需重复填写。"
               badge={extractionReused ? '复用主模型' : '独立配置'}
             />
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
               <TextField label="Base URL" value={extractionBaseUrl} onChange={setExtractionBaseUrl} placeholder="留空复用主模型" icon={<Link2 className="h-4 w-4" />} />
               <TextField label="API Key" value={extractionApiKey} onChange={setExtractionApiKey} placeholder="留空复用主模型" type="password" icon={<Key className="h-4 w-4" />} />
               <TextField label="Model ID" value={extractionModel} onChange={setExtractionModel} placeholder="gpt-4o-mini / deepseek-chat" />
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 border-t pt-5 md:grid-cols-2 xl:grid-cols-4" style={{ borderColor: 'var(--color-border)' }}>
-            <NumberField label="诊断 Token 上限" value={maxTokens} onChange={setMaxTokens} placeholder="28000" icon={<Hash className="h-3.5 w-3.5" />} />
+          <div className="grid min-w-0 grid-cols-1 gap-4 border-t pt-5 sm:grid-cols-2" style={{ borderColor: 'var(--color-border)' }}>
             <NumberField label="诊断超时秒数" value={timeout} onChange={setTimeout_} placeholder="300" min={10} icon={<Clock className="h-3.5 w-3.5" />} />
-            <NumberField label="提取 Token 上限" value={extractionMaxTokens} onChange={setExtractionMaxTokens} placeholder="28000" icon={<Hash className="h-3.5 w-3.5" />} />
             <NumberField label="提取超时秒数" value={extractionTimeout} onChange={setExtractionTimeout} placeholder="300" min={10} icon={<Clock className="h-3.5 w-3.5" />} />
           </div>
 
-          <div className="grid grid-cols-1 gap-4 border-t pt-5 md:grid-cols-[minmax(0,1fr)_240px]" style={{ borderColor: 'var(--color-border)' }}>
+          <div className="grid min-w-0 grid-cols-1 gap-5 border-t pt-5 xl:grid-cols-[minmax(0,1fr)_240px]" style={{ borderColor: 'var(--color-border)' }}>
             <label className="block space-y-3">
               <span className="flex items-center justify-between gap-3 text-xs font-bold" style={labelStyle}>
                 <span className="inline-flex items-center gap-1.5">

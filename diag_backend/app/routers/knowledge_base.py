@@ -1,7 +1,8 @@
 """Knowledge Base Router - Local storage + RAGFlow auto-sync"""
+import asyncio
 import os
 import uuid
-from typing import Optional
+from typing import Literal, Optional
 from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPException
 from ..core.auth import get_current_user
 from ..core.config import get_settings
@@ -28,7 +29,7 @@ def _doc_response(doc: dict) -> KnowledgeDocResponse:
 
 
 def _build_doc(file: UploadFile, title: Optional[str], description: Optional[str],
-               tags: Optional[str], user_id: str) -> dict:
+               tags: Optional[str], user_id: str, knowledge_type: str = "") -> dict:
     ext = (file.filename.rsplit(".", 1)[-1] if "." in file.filename else "").lower()
     storage_dir = os.path.join(get_settings().knowledge_base_storage_path, "")
     os.makedirs(storage_dir, exist_ok=True)
@@ -38,6 +39,7 @@ def _build_doc(file: UploadFile, title: Optional[str], description: Optional[str
         "file_path": os.path.join(storage_dir, f"{uuid.uuid4().hex}.{ext}"),
         "file_id": uuid.uuid4().hex, "tags": [t.strip() for t in (tags or "").split(",") if t.strip()],
         "user_id": user_id, "uploaded_at": utc_now_iso(),
+        "knowledge_type": knowledge_type,
         "ragflow_dataset_id": "", "ragflow_doc_id": "", "status": "ready",
     }
 
@@ -46,6 +48,9 @@ def _build_doc(file: UploadFile, title: Optional[str], description: Optional[str
 async def upload_document(
     file: UploadFile = File(...), title: Optional[str] = Form(None),
     description: Optional[str] = Form(""), tags: Optional[str] = Form(""),
+    knowledge_type: Optional[
+        Literal["troubleshooting", "repair_case", "operation_guide", "faq"]
+    ] = Form(None),
     current_user: dict = Depends(get_current_user),
 ):
     if not file.filename:
@@ -58,7 +63,14 @@ async def upload_document(
     if len(contents) > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail=f"文件大小超过限制 ({MAX_FILE_SIZE // 1024 // 1024}MB)")
 
-    doc = _build_doc(file, title, description, tags, current_user.get("user_id", ""))
+    doc = _build_doc(
+        file,
+        title,
+        description,
+        tags,
+        current_user.get("id", ""),
+        knowledge_type or "",
+    )
     with open(doc["file_path"], "wb") as f:
         f.write(contents)
     doc["size_bytes"] = len(contents)
@@ -67,8 +79,16 @@ async def upload_document(
     result = await col.insert_one(doc)
     doc["_id"] = result.inserted_id
 
-    dataset_id = await ragflow_service.resolve_default_dataset()
-    rf_resp = await ragflow_service.upload_document(dataset_id=dataset_id, file_path=doc["file_path"], file_name=file.filename)
+    dataset_id = await ragflow_service.resolve_knowledge_dataset(knowledge_type or "")
+    rf_resp = (
+        await ragflow_service.upload_document(
+            dataset_id=dataset_id,
+            file_path=doc["file_path"],
+            file_name=file.filename,
+        )
+        if dataset_id
+        else {}
+    )
     rf_doc_id = rf_resp.get("id", "")
     if rf_doc_id:
         await col.update_one({"_id": result.inserted_id},
@@ -160,16 +180,50 @@ async def update_document(doc_id: str, body: KnowledgeDocUpdateRequest, current_
 @router.get("/ragflow/status")
 async def ragflow_status(current_user: dict = Depends(get_current_user)):
     try:
-        dataset_id = await ragflow_service.resolve_default_dataset()
+        dataset_ids = await ragflow_service.resolve_retrieval_dataset_ids()
         datasets = await ragflow_service.list_datasets()
-        dataset_info = next((ds for ds in datasets if ds.get("id") == dataset_id), None)
-        docs = await ragflow_service.list_documents(dataset_id, page_size=1)
+        selected_datasets = [
+            dataset for dataset in datasets if dataset.get("id") in dataset_ids
+        ]
+        document_lists = await asyncio.gather(
+            *(
+                ragflow_service.list_documents(dataset_id, page_size=1000)
+                for dataset_id in dataset_ids
+            )
+        )
+        dataset_summaries = [
+            {
+                "id": dataset_id,
+                "name": next(
+                    (
+                        dataset.get("name", "")
+                        for dataset in selected_datasets
+                        if dataset.get("id") == dataset_id
+                    ),
+                    "",
+                ),
+                "document_count": len(documents),
+                "chunk_count": next(
+                    (
+                        dataset.get("chunk_count", 0)
+                        for dataset in selected_datasets
+                        if dataset.get("id") == dataset_id
+                    ),
+                    0,
+                ),
+            }
+            for dataset_id, documents in zip(dataset_ids, document_lists)
+        ]
         return ApiResponse(success=True, data={
             "enabled": True, "dataset": {
-                "id": dataset_id, "name": ragflow_service.RAGFLOW_DEFAULT_DATASET_NAME, "info": dataset_info,
-                "document_count": len(docs) if isinstance(docs, list) else 0,
-                "chunk_count": dataset_info.get("chunk_count", 0) if dataset_info else 0,
+                "id": dataset_ids[0] if dataset_ids else "",
+                "name": "多数据集知识库" if len(dataset_ids) > 1 else (
+                    dataset_summaries[0]["name"] if dataset_summaries else ""
+                ),
+                "document_count": sum(item["document_count"] for item in dataset_summaries),
+                "chunk_count": sum(item["chunk_count"] for item in dataset_summaries),
             },
+            "datasets": dataset_summaries,
         })
     except Exception as e:
         return ApiResponse(success=True, data={"enabled": True, "error": str(e), "dataset": None})

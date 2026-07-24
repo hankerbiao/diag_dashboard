@@ -13,12 +13,14 @@
 from __future__ import annotations
 
 import logging
+from time import perf_counter
 from typing import Awaitable, Callable, Optional
 
 from ..llm_service import llm_service
 from ..log_extractor import ContextExtractor, extract_log_context
 from .ai_extractor import AILogExtractor
 from .prompt_registry import DEFAULT_ID, PromptRegistry
+from .preprocessor import preprocess_log
 from .segmenter import LogSegment, LogSegmenter
 
 logger = logging.getLogger(__name__)
@@ -28,14 +30,16 @@ SMALL_LOG_MAX_LINES = 500
 
 
 def _estimate_segment_chars() -> int:
-    """依据提取模型上下文窗口推算每段字符预算（约 50% 输入 + 2 字符/token）。
+    """依据后端识别出的提取模型窗口推算每段字符预算。
 
     配置未加载时回退默认 12000。
     """
     try:
-        ctx = llm_service.get_config_value("model_context_len", client="extraction")
+        if not llm_service.get_config_value("model", client="extraction"):
+            return DEFAULT_SEGMENT_CHARS
+        ctx = llm_service.get_context_window(client="extraction")
         if ctx and isinstance(ctx, (int, float)) and ctx > 4000:
-            # 约 50% 上下文作为输入预算，按 2 字符/token 估算，并限制上限避免单段过大
+            # 约 50% 上下文作为输入预算，仍限制单段大小以控制并发请求成本。
             return min(24000, max(4000, int(ctx * 0.5 * 2)))
     except Exception:
         pass
@@ -46,9 +50,10 @@ async def process_log(
     raw_text: str,
     machine_model: str = "",
     *,
+    prompt_config: Optional[dict] = None,
     segment_chars: Optional[int] = None,
     overlap: int = 200,
-    concurrency: int = 6,
+    concurrency: int = 8,
     mode: str = "balanced",
     on_progress: Optional[Callable[[str, str], Awaitable[None]]] = None,
 ) -> dict:
@@ -58,6 +63,7 @@ async def process_log(
     Args:
         raw_text: 原始日志全文
         machine_model: 设备机型；用于选择对应提取 prompt，空串则使用 default
+        prompt_config: 调用方已解析的提取 prompt；未传时按 machine_model 查询
         segment_chars: 每段字符预算；None 时按提取模型上下文窗口自动推算
         overlap: 段间重叠字符数
         concurrency: 并发提取段落数
@@ -70,12 +76,16 @@ async def process_log(
           "structured": <结构化错误 dict 或 None（编码兜底时）>,
         }
     """
+    started_at = perf_counter()
+
     async def _progress(stage: str, detail: str) -> None:
         if on_progress:
             await on_progress(stage, detail)
 
-    registry = PromptRegistry()
-    prompt = await registry.get_prompt(machine_model)
+    prompt = prompt_config
+    if prompt is None:
+        registry = PromptRegistry()
+        prompt = await registry.get_prompt(machine_model)
     prompt_model = prompt.get("model", DEFAULT_ID)
 
     if segment_chars is None or segment_chars <= 0:
@@ -89,10 +99,18 @@ async def process_log(
     except Exception as e:  # noqa: BLE001
         logger.warning("AI 未配置，回退编码级日志提取: %s", e)
 
+    total_lines = len(raw_text.splitlines()) if raw_text else 0
     stats_base = {
         "model_used": machine_model or DEFAULT_ID,
         "prompt_model": prompt_model,
-        "total_lines": len(raw_text.splitlines()) if raw_text else 0,
+        "total_lines": total_lines,
+        "preprocessing_applied": False,
+        "preprocessing_original_lines": total_lines,
+        "preprocessing_kept_lines": total_lines,
+        "preprocessing_removed_lines": 0,
+        "preprocessing_retention_ratio": 1.0,
+        "preprocessing_level_lines": 0,
+        "preprocessing_anomaly_entries": 0,
     }
 
     if not ai_ready:
@@ -100,12 +118,14 @@ async def process_log(
         extracted, enc_stats = extract_log_context(raw_text, mode=mode)
         stats = {**stats_base, "ai_extracted": False, "segment_count": 0,
                  "error_count": enc_stats.get("matched_lines", 0),
-                 "processing_mode": "regex_fallback", **enc_stats}
+                 "processing_mode": "regex_fallback",
+                 "extraction_duration_ms": round((perf_counter() - started_at) * 1000),
+                 **enc_stats}
         return {"extracted": extracted, "stats": stats, "structured": None}
 
-    # Small logs stay intact; larger logs are adaptively chunked.
-    total_lines = stats_base["total_lines"]
-    if total_lines <= SMALL_LOG_MAX_LINES:
+    # 行数和字符数都在预算内时才整份发送，避免少量超长行撑爆模型上下文。
+    is_small = total_lines <= SMALL_LOG_MAX_LINES and len(raw_text) <= segment_chars
+    if is_small:
         segments = [
             LogSegment(
                 text=raw_text,
@@ -115,16 +135,68 @@ async def process_log(
             )
         ] if raw_text else []
         processing_mode = "single"
-        await _progress("log_split", f"日志共 {total_lines} 行，整份交给提取模型")
-    else:
-        segments = LogSegmenter.split_with_metadata(raw_text, segment_chars, overlap)
-        processing_mode = "chunked"
         await _progress(
             "log_split",
-            f"日志共 {total_lines} 行，已自适应拆分为 {len(segments)} 块",
+            f"日志共 {total_lines} 行 / {len(raw_text)} 字符，整份交给提取模型",
         )
+    else:
+        preprocessed = preprocess_log(raw_text)
+        stats_base.update(preprocessed.stats())
+        if preprocessed.applied and not preprocessed.text:
+            await _progress(
+                "log_split",
+                f"日志共 {total_lines} 行，规则清洗后未发现需提交 AI 的异常内容",
+            )
+            await _progress("log_merge", "规则清洗未发现异常，跳过 AI 分块提取")
+            stats = {
+                **stats_base,
+                "ai_extracted": False,
+                "segment_count": 0,
+                "error_count": 0,
+                "processing_mode": "prefiltered_empty",
+                "extraction_duration_ms": round((perf_counter() - started_at) * 1000),
+            }
+            return {
+                "extracted": "",
+                "stats": stats,
+                "structured": {
+                    "errors": [],
+                    "summary": "",
+                    "has_critical_errors": False,
+                    "suggested_root_cause": "",
+                },
+            }
+
+        segment_text = preprocessed.text if preprocessed.applied else raw_text
+        source_lines = preprocessed.source_line_numbers if preprocessed.applied else None
+        segments = LogSegmenter.split_with_metadata(
+            segment_text,
+            segment_chars,
+            overlap,
+            source_line_numbers=source_lines,
+        )
+        processing_mode = "prefiltered_chunked" if preprocessed.applied else "chunked"
+        if preprocessed.applied:
+            await _progress(
+                "log_split",
+                f"日志共 {total_lines} 行，规则清洗保留 {preprocessed.kept_lines} 行、"
+                f"过滤 {preprocessed.removed_lines} 行，已拆分为 {len(segments)} 块",
+            )
+        else:
+            await _progress(
+                "log_split",
+                f"日志共 {total_lines} 行，已自适应拆分为 {len(segments)} 块",
+            )
 
     await _progress("log_extract", f"正在并发提取 {len(segments)} 个日志块")
+    logger.info(
+        "AI 日志提取开始 model=%s mode=%s segments=%d total_lines=%d concurrency=%d",
+        machine_model or DEFAULT_ID,
+        processing_mode,
+        len(segments),
+        total_lines,
+        concurrency,
+    )
     extractor = AILogExtractor(concurrency=concurrency)
     try:
         async def _chunk_progress(completed: int, total: int) -> None:
@@ -151,7 +223,19 @@ async def process_log(
             "processing_mode": processing_mode,
             "successful_segments": structured.get("successful_segments", len(segments)),
             "failed_segments": structured.get("failed_segments", 0),
+            "retry_count": structured.get("retry_count", 0),
+            "extraction_duration_ms": round((perf_counter() - started_at) * 1000),
         }
+        logger.info(
+            "AI 日志提取完成 model=%s mode=%s segments=%d success=%d failed=%d errors=%d duration_ms=%d",
+            machine_model or DEFAULT_ID,
+            processing_mode,
+            len(segments),
+            stats["successful_segments"],
+            stats["failed_segments"],
+            stats["error_count"],
+            stats["extraction_duration_ms"],
+        )
         return {"extracted": flattened, "stats": stats, "structured": structured}
     except Exception as e:  # noqa: BLE001
         logger.warning("AI 日志提取失败，回退编码级: %s", e)
@@ -160,6 +244,7 @@ async def process_log(
         stats = {**stats_base, "ai_extracted": False, "segment_count": 0,
                  "error_count": enc_stats.get("matched_lines", 0),
                  "processing_mode": "regex_fallback",
+                 "extraction_duration_ms": round((perf_counter() - started_at) * 1000),
                  "fallback_error": str(e), **enc_stats}
         return {"extracted": extracted, "stats": stats, "structured": None}
 
@@ -170,5 +255,6 @@ __all__ = [
     "AILogExtractor",
     "PromptRegistry",
     "ContextExtractor",
+    "preprocess_log",
     "SMALL_LOG_MAX_LINES",
 ]

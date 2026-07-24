@@ -2,7 +2,7 @@
  * 自定义 JWT 认证 API
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 const TOKEN_KEY = 'auth_token';
 const REMEMBER_EMAIL_KEY = 'remember_email';
 const REMEMBER_PASSWORD_KEY = 'remember_password';

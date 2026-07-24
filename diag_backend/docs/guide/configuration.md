@@ -24,7 +24,11 @@
 | `KNOWLEDGE_BASE_STORAGE_PATH` | `./data/knowledge_base` | 本地上传目录 |
 | `RAGFLOW_API_URL` | `""` | 空则跳过 RAGFlow |
 | `RAGFLOW_API_KEY` | `""` | |
-| `RAGFLOW_DEFAULT_DATASET` | `weaveeye-knowledge-base` | |
+| `RAGFLOW_DEFAULT_DATASET` | `weaveeye-knowledge-base` | 普通上传和历史知识数据集 |
+| `RAGFLOW_TROUBLESHOOTING_DATASET` | `weaveeye-troubleshooting` | 故障排查知识数据集 |
+| `RAGFLOW_REPAIR_CASE_DATASET` | `weaveeye-repair-cases` | 维修案例知识数据集 |
+| `RAGFLOW_OPERATION_GUIDE_DATASET` | `weaveeye-operation-guides` | 操作规范知识数据集 |
+| `RAGFLOW_FAQ_DATASET` | `weaveeye-faq` | 常见问答知识数据集 |
 | `MES_REQUEST_TIMEOUT` | `30` | MES HTTP 超时秒 |
 | `LOG_LEVEL` | `INFO` | |
 | `LOG_FORMAT` | `console` | `console` / `json` |

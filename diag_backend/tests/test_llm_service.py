@@ -2,9 +2,12 @@
 LLM 服务单元测试 — 覆盖双模型客户端（回答/提取）、配置热加载与未配置时的模拟降级。
 """
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from openai import BadRequestError
 
 from app.services.llm_service import LLMService
 
@@ -54,6 +57,54 @@ class TestLLMService:
         assert service._answer_client is fake
         assert service.openai_client is fake
 
+    @pytest.mark.asyncio
+    async def test_connection_uses_temporary_client_and_reports_latency(self):
+        service = LLMService()
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(
+            return_value=SimpleNamespace(choices=[SimpleNamespace()])
+        )
+        client.close = AsyncMock()
+
+        with patch.object(service, "_build_client", return_value=client):
+            result = await service.test_connection(
+                {
+                    "api_key": "sk-test",
+                    "base_url": "https://model.example/v1",
+                    "model": "test-model",
+                    "timeout": 30,
+                }
+            )
+
+        assert result["success"] is True
+        assert result["model"] == "test-model"
+        assert isinstance(result["latency_ms"], int)
+        client.chat.completions.create.assert_awaited_once()
+        client.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_connection_masks_api_key_in_error(self):
+        service = LLMService()
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(
+            side_effect=RuntimeError("request rejected for sk-sensitive")
+        )
+        client.close = AsyncMock()
+
+        with patch.object(service, "_build_client", return_value=client):
+            result = await service.test_connection(
+                {
+                    "api_key": "sk-sensitive",
+                    "base_url": "https://model.example/v1",
+                    "model": "test-model",
+                }
+            )
+
+        assert result["success"] is False
+        assert "sk-sensitive" not in result["error"]
+        assert "***" in result["error"]
+        client.close.assert_awaited_once()
+
     def test_mock_response_for_diagnosis(self):
         """诊断类消息的模拟响应是合法 JSON 且含诊断字段"""
         service = LLMService()
@@ -97,6 +148,94 @@ class TestLLMService:
         assert len(response) > 0
         data = json.loads(response)
         assert "category" in data  # 消息含"诊断"关键词 → 诊断格式
+
+    @pytest.mark.asyncio
+    async def test_preprocessed_log_prompt_explains_original_line_prefix(self):
+        service = LLMService()
+        response = json.dumps(
+            {
+                "errors": [],
+                "summary": "ok",
+                "has_critical_errors": False,
+                "suggested_root_cause": "",
+            }
+        )
+
+        with patch.object(
+            service, "chat_completion", new=AsyncMock(return_value=response)
+        ) as chat:
+            await service.extract_log_with_llm(
+                "[L123] ERROR fan failed\n",
+                encoding_stats={"source_line_prefixes": True},
+                user_template="日志：\n{log_text}",
+            )
+
+        user_prompt = chat.await_args.args[0][1]["content"]
+        assert "[L123] ERROR fan failed" in user_prompt
+        assert "[L123] 表示该行在原始完整日志中的第 123 行" in user_prompt
+
+
+class TestAdaptiveTokenBudget:
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("gpt-4", 8192),
+            ("gpt-4o-mini", 128000),
+            ("gpt-4.1", 1047576),
+            ("deepseek-reasoner", 65536),
+            ("qwen2.5-72b-instruct", 131072),
+            ("anthropic/claude-sonnet-4", 200000),
+            ("company/custom-model", 32768),
+        ],
+    )
+    def test_infers_context_window_from_model_id(self, model: str, expected: int):
+        assert LLMService._infer_model_context_len(model) == expected
+
+    def test_prepare_request_truncates_oversized_log(self):
+        service = LLMService()
+        cfg = {"model": "custom", "base_url": "", "model_context_len": 4096, "max_tokens": 28000}
+        messages = [
+            {"role": "system", "content": "硬件诊断工程师"},
+            {"role": "user", "content": "ERROR 内存故障 0xDEADBEEF\n" * 4000},
+        ]
+
+        prepared, max_output, context_len, input_tokens = service._prepare_request(
+            messages, cfg, "custom", "answer"
+        )
+
+        assert context_len == 4096
+        assert input_tokens + max_output + 512 <= context_len
+        assert len(prepared[1]["content"]) < len(messages[1]["content"])
+        assert "自动裁剪" in prepared[1]["content"]
+
+    def test_output_budget_is_automatic_and_client_specific(self):
+        service = LLMService()
+        cfg = {"model": "custom", "base_url": "", "model_context_len": 32768, "max_tokens": 28000}
+        messages = [{"role": "user", "content": "分析错误"}]
+
+        _, answer_output, _, _ = service._prepare_request(messages, cfg, "custom", "answer")
+        _, extraction_output, _, _ = service._prepare_request(messages, cfg, "custom", "extraction")
+
+        assert answer_output == 8192
+        assert extraction_output == 4096
+
+    def test_parses_and_learns_provider_context_limit(self):
+        service = LLMService()
+        cfg = {"model": "proxy-model", "base_url": "https://proxy/v1", "model_context_len": 0}
+        detail = "This model's maximum context length is 16,384 tokens"
+
+        assert service._context_limit_from_error(detail) == 16384
+        assert service._learn_context_limit(cfg, "proxy-model", detail, 32768) == 16384
+        assert service._resolve_context_len(cfg, "proxy-model") == 16384
+
+    def test_parses_and_learns_provider_output_limit(self):
+        service = LLMService()
+        cfg = {"model": "proxy-model", "base_url": "https://proxy/v1", "max_tokens": 28000}
+        detail = "max_tokens must be less than or equal to 4,096"
+
+        assert service._output_limit_from_error(detail) == 4096
+        assert service._learn_output_limit(cfg, "proxy-model", detail, 8192) == 4096
+        assert service._resolve_output_limit(cfg, "proxy-model", "answer") == 4096
 
 
 class TestLLMServiceWithMockedClient:
@@ -159,6 +298,77 @@ class TestLLMServiceWithMockedClient:
         mock_client.chat.completions.create.assert_called_once()
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         assert call_kwargs["model"] == service._config["extraction"]["model"]
+
+    @pytest.mark.asyncio
+    async def test_extraction_uses_structured_reasoning_when_content_is_none(self):
+        service = LLMService()
+        mock_client = MagicMock()
+        message = MagicMock()
+        message.content = None
+        message.reasoning_content = '{"errors": [], "summary": "ok"}'
+        response = MagicMock()
+        response.choices = [MagicMock(message=message, finish_reason="stop")]
+        mock_client.chat.completions.create = AsyncMock(return_value=response)
+        service._extraction_client = mock_client
+        service._loaded = True
+        service._config = _nested_config(api_key="sk-extract")
+
+        result = await service.chat_completion(
+            [{"role": "user", "content": "提取错误"}], client="extraction"
+        )
+
+        assert result == '{"errors": [], "summary": "ok"}'
+
+    @pytest.mark.asyncio
+    async def test_chat_completion_reports_empty_content_clearly(self):
+        service = LLMService()
+        mock_client = MagicMock()
+        message = MagicMock()
+        message.content = None
+        message.reasoning_content = None
+        message.model_extra = {}
+        response = MagicMock()
+        response.choices = [MagicMock(message=message, finish_reason="length")]
+        mock_client.chat.completions.create = AsyncMock(return_value=response)
+        service._extraction_client = mock_client
+        service._loaded = True
+        service._config = _nested_config(api_key="sk-extract")
+
+        with pytest.raises(RuntimeError, match="LLM 返回空内容.*finish_reason=length"):
+            await service.chat_completion(
+                [{"role": "user", "content": "提取错误"}], client="extraction"
+            )
+
+    def test_extract_json_rejects_none_with_clear_error(self):
+        with pytest.raises(ValueError, match="LLM 返回内容为空"):
+            LLMService._extract_json(None)  # type: ignore[arg-type]
+
+    @pytest.mark.asyncio
+    async def test_context_error_learns_limit_and_retries_once(self, mock_client: MagicMock):
+        service = LLMService()
+        service.openai_client = mock_client
+        service._loaded = True
+        service._config = _nested_config(api_key="sk-test", model="proxy-model")
+
+        request = httpx.Request("POST", "https://test.api.com/v1/chat/completions")
+        error = BadRequestError(
+            "context exceeded",
+            response=httpx.Response(400, request=request),
+            body={"error": {"message": "Maximum context length is 4096 tokens"}},
+        )
+        success = MagicMock()
+        success.choices = [MagicMock(message=MagicMock(content="ok"))]
+        mock_client.chat.completions.create.side_effect = [error, success]
+
+        response = await service.chat_completion(
+            [{"role": "user", "content": "ERROR 0xDEADBEEF\n" * 5000}]
+        )
+
+        assert response == "ok"
+        assert mock_client.chat.completions.create.await_count == 2
+        retry_kwargs = mock_client.chat.completions.create.await_args_list[1].kwargs
+        retry_input = service._estimate_messages_tokens(retry_kwargs["messages"])
+        assert retry_input + retry_kwargs["max_tokens"] + 512 <= 4096
 
 
 class TestLLMServiceReload:

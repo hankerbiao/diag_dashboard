@@ -11,27 +11,45 @@ import DiagnosisTab from './components/diagnosis/DiagnosisTab';
 import ErrorLogsTab from './components/error-logs/ErrorLogsTab';
 import SettingsTab from './components/settings/SettingsTab';
 import KnowledgeBaseTab from './components/knowledge-base/KnowledgeBaseTab';
+import FeedbackManagementTab from './components/feedback/FeedbackManagementTab';
 import { analyticsApi, factoryApi, FactorySite } from './api/fastapi';
+
+const FACTORY_STORAGE_KEY = 'weaveeye:selected-factory';
 
 function AppContent() {
   const { theme } = useTheme();
   const [activeTab, setActiveTab] = useState<NavigationTab>('diagnosis');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [factorySites, setFactorySites] = useState<FactorySite[]>([]);
   const [factory, setFactory] = useState('');
+
+  const handleFactoryChange = (factoryId: string) => {
+    setFactory(factoryId);
+    if (factoryId) localStorage.setItem(FACTORY_STORAGE_KEY, factoryId);
+    else localStorage.removeItem(FACTORY_STORAGE_KEY);
+  };
 
   // 加载厂区列表，并预热分析看板缓存
   useEffect(() => {
     factoryApi.list().then((resp) => {
       if (resp.success && resp.data && resp.data.length > 0) {
         setFactorySites(resp.data);
-        const firstFactory = resp.data[0].factory_id;
-        setFactory(firstFactory);
+        const cachedFactory = localStorage.getItem(FACTORY_STORAGE_KEY);
+        const selectedFactory = resp.data.some(
+          (site) => site.factory_id === cachedFactory,
+        ) ? cachedFactory as string : resp.data[0].factory_id;
+        handleFactoryChange(selectedFactory);
         // 预热分析看板（预计算统计）
-        analyticsApi.getSummary({ factory_id: firstFactory, days: 30 }).catch(() => {});
-        analyticsApi.getDailyStats({ factory_id: firstFactory, days: 30 }).catch(() => {});
+        analyticsApi.getSummary({ factory_id: selectedFactory, days: 30 }).catch(() => {});
+        analyticsApi.getDailyStats({ factory_id: selectedFactory, days: 30 }).catch(() => {});
       }
     });
   }, []);
+
+  const handleTabChange = (tab: NavigationTab) => {
+    setActiveTab(tab);
+    setSidebarOpen(false);
+  };
 
   return (
     <div
@@ -43,23 +61,36 @@ function AppContent() {
         color: 'var(--color-text-primary)',
       }}
     >
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
+      <Sidebar
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
 
-      <div className="flex-1 flex flex-col relative overflow-hidden h-full">
+      <div className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden">
         <Header
           activeTab={activeTab}
           factory={factory}
           factories={factorySites}
-          onFactoryChange={setFactory}
+          onFactoryChange={handleFactoryChange}
+          onMenuClick={() => setSidebarOpen(true)}
         />
 
         <div
           className="flex-1 flex flex-col min-h-0 relative"
           style={{ backgroundColor: 'var(--color-bg-primary)' }}
         >
-          {activeTab === 'diagnosis' && <DiagnosisTab factory={factory} factorySites={factorySites} />}
+          {activeTab === 'diagnosis' && (
+            <DiagnosisTab
+              factory={factory}
+              factorySites={factorySites}
+              onFactoryChange={handleFactoryChange}
+            />
+          )}
           {activeTab === 'error_logs' && <ErrorLogsTab factory={factory} factorySites={factorySites} />}
           {activeTab === 'knowledge_base' && <KnowledgeBaseTab />}
+          {activeTab === 'feedback' && <FeedbackManagementTab factory={factory} factorySites={factorySites} />}
           {activeTab === 'settings' && <SettingsTab />}
         </div>
 

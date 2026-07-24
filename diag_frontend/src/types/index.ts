@@ -1,4 +1,4 @@
-export type NavigationTab = 'diagnosis' | 'error_logs' | 'knowledge_base' | 'settings';
+export type NavigationTab = 'diagnosis' | 'error_logs' | 'knowledge_base' | 'feedback' | 'settings';
 
 export interface ErrorLogRow {
   id: string;

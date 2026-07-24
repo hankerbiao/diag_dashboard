@@ -4,7 +4,6 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
 
 from app.services.llm_service import llm_service
 from app.core.auth import create_access_token
@@ -149,4 +148,116 @@ class TestUpdateAiConfig:
             "/api/settings/ai-config",
             json={"model": "gpt-4o"}
         )
+        assert response.status_code == 401
+
+
+class TestAiConfigConnectivity:
+    """模型服务连通性测试接口。"""
+
+    @pytest.mark.asyncio
+    async def test_reuses_stored_secret_and_answer_connection(
+        self,
+        async_client,
+        admin_headers: dict,
+    ):
+        collection = AsyncMock()
+        collection.find_one = AsyncMock(
+            return_value={
+                "_id": "ai_config",
+                "api_key": "sk-real-secret",
+                "base_url": "https://model.example/v1",
+                "model": "answer-model",
+                "timeout": 300,
+            }
+        )
+        connection_test = AsyncMock(
+            return_value={
+                "success": True,
+                "model": "answer-model",
+                "base_url": "https://model.example/v1",
+                "latency_ms": 32,
+            }
+        )
+
+        with patch(
+            "app.routers.settings.get_collection",
+            return_value=collection,
+        ), patch.object(llm_service, "test_connection", connection_test):
+            response = await async_client.post(
+                "/api/settings/ai-config/test",
+                headers=admin_headers,
+                json={
+                    "api_key": "sk-****ret",
+                    "base_url": "https://model.example/v1",
+                    "model": "answer-model",
+                    "extraction_api_key": "",
+                    "extraction_base_url": "",
+                    "extraction_model": "",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()["data"]
+        assert body["all_connected"] is True
+        assert body["results"][1]["reused_answer"] is True
+        assert connection_test.await_count == 1
+        tested_config = connection_test.await_args.args[0]
+        assert tested_config["api_key"] == "sk-real-secret"
+        assert tested_config["timeout"] == 300
+
+    @pytest.mark.asyncio
+    async def test_independent_extraction_model_returns_partial_failure(
+        self,
+        async_client,
+        admin_headers: dict,
+    ):
+        collection = AsyncMock()
+        collection.find_one = AsyncMock(return_value={})
+        connection_test = AsyncMock(
+            side_effect=[
+                {
+                    "success": True,
+                    "model": "answer-model",
+                    "base_url": "https://answer.example/v1",
+                    "latency_ms": 20,
+                },
+                {
+                    "success": False,
+                    "model": "extract-model",
+                    "base_url": "https://extract.example/v1",
+                    "error": "connection refused",
+                },
+            ]
+        )
+
+        with patch(
+            "app.routers.settings.get_collection",
+            return_value=collection,
+        ), patch.object(llm_service, "test_connection", connection_test):
+            response = await async_client.post(
+                "/api/settings/ai-config/test",
+                headers=admin_headers,
+                json={
+                    "api_key": "answer-key",
+                    "base_url": "https://answer.example/v1",
+                    "model": "answer-model",
+                    "extraction_api_key": "extract-key",
+                    "extraction_base_url": "https://extract.example/v1",
+                    "extraction_model": "extract-model",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()["data"]
+        assert body["all_connected"] is False
+        assert [item["success"] for item in body["results"]] == [True, False]
+        assert connection_test.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_connectivity_requires_authentication(self, async_client):
+        response = await async_client.post(
+            "/api/settings/ai-config/test",
+            json={"model": "test-model"},
+        )
+
         assert response.status_code == 401
