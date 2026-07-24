@@ -12,7 +12,7 @@ FastAPI 自动生成 OpenAPI 3.0 schema。
 
 ## 认证测试
 
-1. `POST /api/auth/login` 获取 token
+1. 经 OA Springboard 登录后调用 `POST /api/auth/oa/callback` 获取应用 token
 2. Swagger 右上角 **Authorize**
 3. 输入 `Bearer <token>`（或仅 token，视 UI 版本）
 

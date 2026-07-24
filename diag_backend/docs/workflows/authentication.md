@@ -1,41 +1,21 @@
-# JWT 认证工作流
+# OA 登录工作流
 
 ```mermaid
 sequenceDiagram
-  participant C as Client
-  participant A as /api/auth
-  participant U as users collection
-
-  C->>A: POST /register {email, password}
-  A->>U: find email
-  A->>U: insert hashed password
-  A-->>C: { access_token, user }
-
-  C->>A: POST /login
-  A->>U: verify
-  A-->>C: JWT
-
-  C->>A: GET /me Authorization Bearer
-  A->>A: jwt.decode
-  A->>U: find by email
-  A-->>C: UserResponse
+  participant C as Frontend
+  participant O as OA Springboard
+  participant A as FastAPI
+  participant U as MongoDB users
+  C->>O: redirect /login_proxy/diagweaveeye?next=...
+  O-->>C: status, payload, next
+  C->>A: POST /api/auth/oa/callback
+  A->>A: verify HS256 signature, exp, itcode
+  A->>U: upsert by itcode
+  A-->>C: application Bearer JWT + user
+  C->>A: GET /api/auth/me (Bearer JWT)
 ```
 
-## Token 存储（前端）
-
-`localStorage` + `AuthContext`；后端无 session 表，纯 stateless JWT。
-
-## 受保护路由
-
-```python
-@router.get("/...")
-async def handler(user=Depends(get_current_user)):
-    ...
-```
-
-## 安全清单
-
-- [ ] 生产更换 JWT_SECRET_KEY
-- [ ] HTTPS 传输
-- [ ] 限制 CORS
-- [ ] 密码强度（当前未强制，可扩展）
+- 发起登录时把一次性随机 state 写入 `next`；回调仅接受前端同源且 state 匹配的地址。
+- 历史本地账号会在首次 OA 登录时按已验证邮箱绑定 `itcode`，保留原用户 ID。
+- OA 错误不会自动循环重试；页面显示重新登录按钮。
+- 主动退出清除应用 token，并暂停本次标签页的自动 OA 跳转。

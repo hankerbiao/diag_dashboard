@@ -6,7 +6,7 @@ diag_backend/
 │   ├── main.py                   # FastAPI 入口
 │   ├── core/                     # 基础设施
 │   │   ├── config.py             # pydantic-settings
-│   │   ├── auth.py               # JWT / 密码哈希
+│   │   ├── auth.py               # 应用 Bearer JWT
 │   │   ├── mongodb.py            # Motor 连接
 │   │   ├── mongodb_indexes.py    # 启动索引 + seed
 │   │   ├── factory_config.py     # factories.yaml 读取

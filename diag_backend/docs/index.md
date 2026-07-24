@@ -67,7 +67,7 @@ npm run docs:build
 | Web 框架 | FastAPI 0.109+ | OpenAPI 自动生成，`/docs` Swagger UI |
 | ASGI 服务器 | Uvicorn | `--reload` 开发热重载 |
 | 数据库 | MongoDB + Motor 3.6+ | 异步驱动，库名默认 `diag_analysis` |
-| 认证 | python-jose + passlib | JWT Bearer，无外部 IdP |
+| 认证 | OA SSO + python-jose | OA payload 验签 + 应用 JWT Bearer |
 | AI | OpenAI 兼容 API | 支持自定义 base_url / Gemini |
 | 知识库 | RAGFlow（可选） | 未配置时不影响启动 |
 | 配置 | pydantic-settings + `.env` | 厂区 YAML 与 `.env` 分离 |

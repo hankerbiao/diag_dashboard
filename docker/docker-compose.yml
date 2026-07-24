@@ -3,6 +3,7 @@
 
 services:
   mongo:
+    container_name: weaveeye-mongodb
     image: mongo:7
     restart: unless-stopped
     volumes:
@@ -15,6 +16,7 @@ services:
       start_period: 10s
 
   backend:
+    container_name: weaveeye-backend
     build:
       context: ..
       dockerfile: diag_backend/Dockerfile
@@ -22,7 +24,7 @@ services:
     env_file:
       - .env
     environment:
-      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017}
       FACTORIES_YAML_PATH: /etc/weaveeye/factories.yaml
       KNOWLEDGE_BASE_STORAGE_PATH: /data/knowledge_base
       LOG_FILE: ""
@@ -38,11 +40,13 @@ services:
         condition: service_healthy
 
   frontend:
+    container_name: weaveeye-frontend
     build:
       context: ../diag_frontend
       dockerfile: Dockerfile
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+        VITE_OA_LOGIN_URL: ${VITE_OA_LOGIN_URL:-http://tl.cooacloud.com/springboard_v3/login_proxy/diagweaveeye}
     restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-3000}:80"

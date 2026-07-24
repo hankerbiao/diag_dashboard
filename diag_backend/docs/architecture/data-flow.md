@@ -64,6 +64,6 @@ flowchart LR
 ## 认证流
 
 ```
-register/login → users 集合 → JWT
+OA callback → users 集合（按 itcode）→ 应用 JWT
 后续请求 Authorization: Bearer → get_current_user → 解码 email → 查 users
 ```

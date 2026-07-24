@@ -1,33 +1,18 @@
-# 认证路由 (auth)
+# Auth Router
 
-**文件：** `app/routers/auth.py`
+## POST /oa/callback
 
-## POST /register
+Body: `{ status, payload, next? }`。
 
-Body: `{ email, password }`
-
-- 检查 email 未占用
-- bcrypt 哈希密码
-- insert `users`
-- 返回 JWT + `UserResponse`
-
-## POST /login
-
-- 验证 email/password
-- 签发 JWT
-- 可选 remember-me 延长过期（若实现）
+- 要求 `status == "success"`
+- 使用 `OA_JWT_SECRET` 验证 HS256 payload 和 `exp`
+- 要求 payload 包含 `itcode`
+- 按 `itcode` 更新 OA profile
+- 返回 `{ access_token, token_type, user }`
 
 ## GET /me
 
-需 Bearer token，返回当前用户 `{ id, email, created_at }`。
+需要应用 Bearer JWT，返回当前 OA 用户的 `id`、`itcode`、`name`、可选 `email`
+和完整 `profile`。
 
-## 模型
-
-`app/models/auth.py` — `RegisterRequest`, `LoginRequest`, `AuthResponse`, `UserResponse`
-
-## 错误码
-
-- 400 — 邮箱已存在、参数无效
-- 401 — 登录失败、token 无效
-
-详见 [JWT 认证工作流](/workflows/authentication)。
+`/register` 和 `/login` 已删除。

@@ -7,10 +7,10 @@ from typing import AsyncGenerator, Generator
 
 import pytest
 from httpx import AsyncClient, ASGITransport
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock
 
 from app.main import app
-from app.core.auth import hash_password, create_access_token
+from app.core.auth import create_access_token
 from app.core.config import Settings
 
 
@@ -35,29 +35,14 @@ def test_settings() -> Settings:
 
 
 @pytest.fixture
-def test_user() -> dict:
-    """测试用户数据"""
-    return {
-        "email": "test@example.com",
-        "password": "testpassword123",
-        "password_hash": None,
-    }
-
-
-@pytest.fixture
-def test_user_with_hash(test_user: dict) -> dict:
-    """带哈希密码的测试用户"""
-    test_user["password_hash"] = hash_password(test_user["password"])
-    return test_user
-
-
-@pytest.fixture
 def valid_token(test_settings: Settings) -> str:
     """生成有效 JWT Token"""
     return create_access_token(
         user_id="test-user-id-123",
         email="test@example.com",
-        expires_delta=timedelta(minutes=60)
+        expires_delta=timedelta(minutes=60),
+        itcode="test-user",
+        name="测试用户",
     )
 
 

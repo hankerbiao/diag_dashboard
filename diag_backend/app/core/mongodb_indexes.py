@@ -16,7 +16,27 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
     """确保所有集合的必要索引存在（幂等操作）"""
 
     # ---- users ----
-    await db["users"].create_index("email", unique=True, name="idx_users_email")
+    # Remove the legacy password-login index. OA users are keyed by itcode;
+    # sparse keeps historical local-account documents valid during migration.
+    user_indexes = await db["users"].index_information()
+    for index_name, index_info in user_indexes.items():
+        if index_info.get("key") == [("email", 1)] and index_info.get("unique"):
+            await db["users"].drop_index(index_name)
+    has_itcode_index = any(
+        index_info.get("key") == [("itcode", 1)]
+        and index_info.get("unique")
+        and index_info.get("sparse")
+        for index_info in user_indexes.values()
+    )
+    if not has_itcode_index:
+        await db["users"].create_index(
+            "itcode", unique=True, sparse=True, name="idx_users_itcode"
+        )
+
+    # OA assertion hashes are inserted once and expire with the upstream token.
+    await db["oa_login_assertions"].create_index(
+        "expires_at", expireAfterSeconds=0, name="idx_oa_assertions_expiry"
+    )
 
     # ---- app_settings ----
     await db["app_settings"].create_index("user_id", unique=True, name="idx_app_settings_user_id")

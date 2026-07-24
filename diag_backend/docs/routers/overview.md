@@ -19,8 +19,8 @@
 
 | Method | Path | 说明 |
 |--------|------|------|
-| POST | `/api/auth/register` | 注册 |
-| POST | `/api/auth/login` | 登录 |
+| POST | `/api/auth/oa/callback` | OA 回调换取应用 JWT |
+| GET | `/api/auth/me` | 当前 OA 用户 |
 | GET | `/api/auth/me` | 当前用户 |
 
 ### Diagnosis

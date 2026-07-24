@@ -6,8 +6,8 @@
 
 | 字段 | 说明 |
 |------|------|
-| email | unique |
-| hashed_password | bcrypt |
+| itcode | OA 用户唯一标识，unique + sparse |
+| name/email/profile | OA 用户资料 |
 | created_at | ISO |
 
 ## app_settings

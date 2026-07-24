@@ -7,9 +7,13 @@
 | 字段 | 类型 | 说明 | 索引 |
 |------|------|------|------|
 | `_id` | ObjectId | 主键 | 默认 |
-| `email` | string | 邮箱（唯一） | unique |
-| `hashed_password` | string | bcrypt 哈希密码 | |
+| `itcode` | string | OA 用户唯一标识 | unique, sparse |
+| `name` | string | OA 用户显示名 | |
+| `email` | string/null | OA 邮箱（可选） | |
+| `profile` | object | OA payload 完整资料 | |
 | `created_at` | datetime | 创建时间 | |
+| `updated_at` | datetime | 资料更新时间 | |
+| `last_login_at` | datetime | 最近登录时间 | |
 
 ### app_settings
 
@@ -19,6 +23,14 @@
 | `ai_model` | LLM 模型名 | |
 | `ai_temperature` | 温度参数 | |
 | `active_kbs` | 启用知识库列表 | |
+
+### oa_login_assertions
+
+| 字段 | 说明 | 索引 |
+|------|------|------|
+| `_id` | 已消费 OA payload 的 SHA-256 | 默认唯一 |
+| `expires_at` | OA token 过期时间 | TTL |
+| `consumed_at` | 回调消费时间 | |
 
 ## 业务数据
 

@@ -6,10 +6,8 @@ openai>=1.10.0
 python-dotenv>=1.0.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
-email-validator>=2.0.0
-# 认证：JWT + 密码哈希
+# 认证：OA JWT + 应用 JWT
 python-jose[cryptography]>=3.3.0
-bcrypt>=4.0.0
 PyYAML>=6.0
 requests>=2.31.0
 python-multipart>=0.0.6

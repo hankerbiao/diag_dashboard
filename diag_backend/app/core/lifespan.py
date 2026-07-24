@@ -12,13 +12,15 @@ async def app_lifespan(app: FastAPI):
     logger.info("=" * 60, extra={"event": "app_startup"})
     logger.info("WeaveEye API 服务启动中...", extra={"event": "app_startup"})
 
+    from .config import get_settings, validate_auth_settings
+
+    app_settings = get_settings()
+    validate_auth_settings(app_settings)
+
     # startup: 连接 MongoDB
     logger.info("正在连接 MongoDB...")
     from .mongodb import connect_mongodb, close_mongodb
     await connect_mongodb()
-    from .config import get_settings
-
-    app_settings = get_settings()
     logger.info("MongoDB 连接成功", extra={"event": "mongodb_connected", "uri": app_settings.mongodb_uri})
 
     logger.info("=" * 60, extra={"event": "app_ready"})

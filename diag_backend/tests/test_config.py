@@ -1,12 +1,9 @@
 """
 配置模块单元测试
 """
-import os
-from unittest.mock import patch
-
 import pytest
 
-from app.core.config import Settings, get_settings
+from app.core.config import Settings, get_settings, validate_auth_settings
 
 
 class TestSettings:
@@ -39,6 +36,22 @@ class TestSettings:
         """测试 Token 过期时间"""
         settings = Settings()
         assert settings.access_token_expire_minutes == 60
+
+    def test_rejects_insecure_auth_defaults(self):
+        with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
+            validate_auth_settings(
+                Settings(
+                    jwt_secret_key="change-this-to-a-random-64-character-string",
+                    oa_jwt_secret="oa-secret",
+                )
+            )
+
+    def test_accepts_configured_auth_secrets(self):
+        settings = Settings(
+            jwt_secret_key="application-secret-that-is-at-least-32-characters",
+            oa_jwt_secret="oa-secret",
+        )
+        validate_auth_settings(settings)
 
 
 class TestGetSettings:

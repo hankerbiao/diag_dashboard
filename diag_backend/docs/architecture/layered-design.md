@@ -37,7 +37,7 @@ Service **不**导入 FastAPI 类型，便于单元测试。
 | `config` | 环境变量 |
 | `mongodb` | 连接生命周期 |
 | `mongodb_indexes` | 索引 + seed |
-| `auth` | JWT、密码、`get_current_user` |
+| `auth` | OA callback、应用 JWT、`get_current_user` |
 | `factory_config` | YAML 厂区 |
 | `lifespan` | FastAPI lifespan |
 | `logger` | 根日志配置 |

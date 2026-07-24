@@ -22,8 +22,10 @@ async def create_indexes():
     db = get_database()
 
     # ===== users =====
-    await db.users.create_index("email", unique=True)
-    print("  ✓ users.email (unique)")
+    await db.users.create_index(
+        "itcode", unique=True, sparse=True, name="idx_users_itcode"
+    )
+    print("  ✓ users.itcode (unique, sparse)")
 
     # ===== sync_jobs =====
     await db.sync_jobs.create_index("status")

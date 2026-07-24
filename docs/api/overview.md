@@ -54,7 +54,7 @@ data: {"success":true,"data":{...}}
 
 ## 认证
 
-除 `/api/auth/login` 和 `/api/auth/register` 外，所有端点需要 Bearer Token。
+除 `/api/auth/oa/callback` 外，所有业务端点需要 Bearer Token。
 详见[认证 API](/api/auth)。
 
 ## 分页

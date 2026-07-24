@@ -9,7 +9,7 @@
 | 后端框架 | FastAPI (Python) | 0.109+ |
 | 数据库驱动 | Motor (MongoDB 异步) | 3.6+ |
 | 数据库 | MongoDB | — |
-| 认证 | 自建 JWT (python-jose + passlib) | — |
+| 认证 | OA SSO + 应用 JWT (python-jose) | — |
 | AI | OpenAI / Gemini 兼容 API | — |
 | 知识库引擎 | RAGFlow | — |
 | 文档 | VitePress | — |

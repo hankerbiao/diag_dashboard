@@ -25,7 +25,7 @@
 
 ### 其他
 
-- `users.email` unique
+- `users.itcode` unique + sparse
 - `diagnosis_cache.error_log_id` unique
 - `diagnosis_sn_history` 多索引
 - `analytics_snapshots.computed_at`

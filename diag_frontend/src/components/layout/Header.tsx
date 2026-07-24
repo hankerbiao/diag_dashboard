@@ -22,13 +22,14 @@ const TAB_TITLES: Record<NavigationTab, string> = {
 
 const TABS_WITH_FACTORY = new Set<NavigationTab>(['error_logs', 'feedback']);
 
-function getInitials(email: string): string {
-  const name = email.split('@')[0];
+function getInitials(value: string): string {
+  const name = value.includes('@') ? value.split('@')[0] : value;
   return name.slice(0, 2).toUpperCase();
 }
 
 export default function Header({ activeTab, factory, factories, onFactoryChange, onMenuClick }: HeaderProps) {
   const { user, signOut } = useAuth();
+  const displayName = user?.name || user?.itcode || user?.email || '';
 
   return (
     <header
@@ -109,14 +110,14 @@ export default function Header({ activeTab, factory, factories, onFactoryChange,
                 borderColor: 'var(--color-border)',
               }}
             >
-              {getInitials(user.email ?? '')}
+              {getInitials(displayName)}
             </div>
             <div className="hidden flex-col lg:flex">
               <span
                 className="text-[13px] leading-tight font-bold flex items-center gap-2"
                 style={{ color: 'var(--color-text-primary)' }}
               >
-                {user.email}
+                {displayName}
               </span>
               <span
                 className="text-[10px] uppercase font-bold tracking-wider"

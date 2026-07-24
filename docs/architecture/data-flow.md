@@ -3,26 +3,18 @@
 ## 认证流程
 
 ```
-LoginPage                    Backend                    MongoDB
+Frontend                OA Springboard              Backend/MongoDB
     │                          │                          │
-    │ POST /api/auth/login     │                          │
-    │ {email, password}        │                          │
-    │─────────────────────────▶│                          │
-    │                          │── find user by email ──▶│
-    │                          │◀── user doc ────────────│
+    │── redirect + next ─────▶│                          │
+    │◀── status,payload,next ─│                          │
     │                          │                          │
-    │                          │── verify password ──────│  (passlib bcrypt)
-    │                          │                          │
-    │                          │── sign JWT ─────────────│  (python-jose, HS256)
-    │                          │                          │
-    │◀── {access_token} ──────│                          │
-    │                          │                          │
+    │── POST /auth/oa/callback ─────────────────────────▶│
+    │                          │        verify OA JWT     │
+    │                          │        upsert by itcode  │
+    │◀── application JWT ───────────────────────────────│
     │ 存 localStorage          │                          │
-    │ 后续请求带 Authorization │                          │
-    │── fetchApi() ──────────▶│                          │
-    │                          │── decode JWT ───────────│
-    │                          │── get_current_user ─────│
-    │                          │                          │
+    │ 后续请求带 Authorization ─────────────────────────▶│
+    │                          │        decode JWT        │
 ```
 
 ## 诊断分析流程

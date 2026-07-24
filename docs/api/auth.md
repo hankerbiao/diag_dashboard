@@ -1,68 +1,42 @@
 # 认证 API
 
-## POST /api/auth/register
+WeaveEye 仅支持 OA 单点登录。Springboard 登录成功后把 `status`、`payload`、`next`
+附加到前端地址，前端再用回调接口换取应用 Bearer JWT。
 
-注册新用户。
+## POST /api/auth/oa/callback
 
-**Request:**
 ```json
 {
-  "email": "user@example.com",
-  "password": "password123"
+  "status": "success",
+  "payload": "<OA HS256 JWT>",
+  "next": "https://weaveeye.example.com/"
 }
 ```
 
-**Response:**
+后端使用 `OA_JWT_SECRET` 验证 payload 的 HS256 签名和 `exp`，按 `itcode`
+更新用户资料，并返回应用 JWT：
+
 ```json
 {
-  "success": true,
-  "data": {
-    "access_token": "eyJhbGciOiJIUzI1NiIs...",
-    "token_type": "bearer"
-  }
-}
-```
-
-## POST /api/auth/login
-
-登录获取 JWT Token。
-
-**Request:**
-```json
-{
-  "email": "user@example.com",
-  "password": "password123",
-  "remember": false
-}
-```
-
-**参数说明：**
-- `remember: false` — Token 60 分钟过期
-- `remember: true` — Token 1 天过期
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "access_token": "eyJhbGciOiJIUzI1NiIs...",
-    "token_type": "bearer"
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
+  "token_type": "bearer",
+  "user": {
+    "id": "507f1f77bcf86cd799439011",
+    "itcode": "zhangsan",
+    "name": "张三",
+    "email": "zhangsan@example.com",
+    "profile": {}
   }
 }
 ```
 
 ## GET /api/auth/me
 
-获取当前登录用户信息（需要 Bearer Token）。
+请求头：`Authorization: Bearer <access_token>`。
 
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "xxx",
-    "email": "user@example.com",
-    "created_at": "2024-01-01T00:00:00"
-  }
-}
-```
+返回当前 OA 用户的 `id`、`itcode`、`name`、可选 `email` 和完整 `profile`。
+
+## 已删除接口
+
+- `POST /api/auth/login`
+- `POST /api/auth/register`

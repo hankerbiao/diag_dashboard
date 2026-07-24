@@ -4,7 +4,7 @@ Base URL: `http://<host>:8000/api`
 
 ## 认证
 
-除 `register`/`login`/`health` 外，业务 API 需：
+除 OA callback 和 `health` 外，业务 API 需：
 
 ```
 Authorization: Bearer <access_token>

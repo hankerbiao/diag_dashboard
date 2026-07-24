@@ -11,6 +11,8 @@ COPY . .
 # Scheme A: browser calls API on host port 8000 (set in .env for docker compose build)
 ARG VITE_API_BASE_URL=http://localhost:8000
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+ARG VITE_OA_LOGIN_URL=http://tl.cooacloud.com/springboard_v3/login_proxy/diagweaveeye
+ENV VITE_OA_LOGIN_URL=$VITE_OA_LOGIN_URL
 
 RUN npm run build
 

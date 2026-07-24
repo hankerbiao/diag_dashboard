@@ -48,7 +48,7 @@ WeaveEye 是前后端分离的智能诊断系统，提供设备 SN 深度诊断�
 | 前端 | React 19、TypeScript、Vite 6、Tailwind CSS 4、Recharts |
 | 后端 | FastAPI、Motor、Pydantic |
 | 数据 | MongoDB |
-| 认证 | 自建 JWT |
+| 认证 | OA SSO + 应用 Bearer JWT |
 | AI | OpenAI / Gemini（兼容 API），可选 RAGFlow |
 
 ---
@@ -85,7 +85,7 @@ cd diag_backend
 uv venv && source .venv/bin/activate
 uv pip install -r requirements.txt
 cp .env.example .env
-# 编辑 .env：MONGODB_URI、JWT_SECRET_KEY、OPENAI_API_KEY 等
+# 编辑 .env：MONGODB_URI、JWT_SECRET_KEY、OA_JWT_SECRET、OPENAI_API_KEY 等
 
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
@@ -124,7 +124,7 @@ npm run dev
 ```bash
 cd docker
 cp .env.example .env
-# 编辑 .env：JWT_SECRET_KEY、VITE_API_BASE_URL 等
+# 编辑 .env：JWT_SECRET_KEY、OA_JWT_SECRET、VITE_API_BASE_URL 等
 # 从其他电脑访问前端时，VITE_API_BASE_URL 改为 http://<宿主机IP>:8000
 
 docker compose up -d --build
@@ -171,6 +171,7 @@ docker compose up -d --build
 | `MONGODB_URI` | MongoDB 连接串 |
 | `MONGODB_DB_NAME` | 数据库名 |
 | `JWT_SECRET_KEY` | 生产环境务必使用长随机串 |
+| `OA_JWT_SECRET` | Springboard OA payload 共享验签密钥 |
 | `OPENAI_API_KEY` / `OPENAI_API_URL` | LLM（未配置时可走 mock） |
 | `RAGFLOW_API_URL` / `RAGFLOW_API_KEY` | 知识库（可选） |
 
@@ -180,6 +181,7 @@ docker compose up -d --build
 
 ```env
 VITE_API_BASE_URL=http://localhost:8000
+VITE_OA_LOGIN_URL=http://tl.cooacloud.com/springboard_v3/login_proxy/diagweaveeye
 ```
 
 Docker 构建前端时，对应变量在 `docker/.env` 的 `VITE_API_BASE_URL`。

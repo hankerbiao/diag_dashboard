@@ -7,12 +7,12 @@ diag_ai_analysis/
 │   │   ├── main.py                  # FastAPI 入口，lifespan 管理 MongoDB 连接 + 调度器
 │   │   ├── core/
 │   │   │   ├── config.py            # Pydantic Settings（MongoDB/JWT/AI/RAGFlow/Sync）
-│   │   │   ├── auth.py              # JWT 签发/验证，密码哈希
+│   │   │   ├── auth.py              # 应用 Bearer JWT 签发/验证
 │   │   │   ├── mongodb.py           # Motor 异步连接管理
 │   │   │   ├── mongodb_indexes.py   # 启动时自动创建索引 + seed 默认厂区
 │   │   │   └── factory_config.py    # 读取 configs/factories.yaml
 │   │   ├── routers/                 # API 路由层
-│   │   │   ├── auth.py              # POST /register, /login, GET /me
+│   │   │   ├── auth.py              # OA callback 与 GET /me
 │   │   │   ├── diagnosis.py         # POST /sn, /error-log/{id}/analyze（SSE）
 │   │   │   ├── error_logs.py        # GET /stats, /trend
 │   │   │   ├── analytics.py         # GET /insights（看板聚合数据）
@@ -35,7 +35,7 @@ diag_ai_analysis/
 ├── diag_frontend/                   # React 前端
 │   ├── src/
 │   │   ├── api/
-│   │   │   ├── auth.ts              # JWT 认证 API
+│   │   │   ├── auth.ts              # OA 回调与应用 JWT 管理
 │   │   │   ├── fastapi.ts           # 通用 HTTP 客户端 + 各模块 API
 │   │   │   └── index.ts
 │   │   ├── components/

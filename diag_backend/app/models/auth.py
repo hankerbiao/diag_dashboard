@@ -1,27 +1,28 @@
-"""
-认证相关请求/响应模型
-"""
-from pydantic import BaseModel, EmailStr
+"""OA 认证请求和响应模型。"""
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-    remember: bool = False  # True = 1天有效期, False = 默认 60 分钟
+class OACallbackRequest(BaseModel):
+    status: str
+    payload: str
+    next: str | None = None
 
 
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    password: str
+class OAUserResponse(BaseModel):
+    id: str
+    itcode: str
+    name: str
+    email: str | None = None
+    profile: dict[str, Any] = Field(default_factory=dict)
 
 
-class AuthResponse(BaseModel):
+class OACallbackResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    user_id: str
-    email: str
+    user: OAUserResponse
 
 
-class UserResponse(BaseModel):
-    id: str
-    email: str
+class UserResponse(OAUserResponse):
+    """当前登录用户响应。"""

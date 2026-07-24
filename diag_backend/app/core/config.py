@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
+    # OA SSO
+    oa_jwt_secret: str = ""
+    oa_app_name: str = "diagweaveeye"
+    oa_login_base_url: str = "http://tl.cooacloud.com/springboard_v3/login_proxy"
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000
@@ -61,3 +66,14 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     return Settings()
+
+
+def validate_auth_settings(settings: Settings) -> None:
+    insecure_jwt_secrets = {
+        "",
+        "change-this-to-a-random-64-character-string",
+    }
+    if settings.jwt_secret_key in insecure_jwt_secrets or len(settings.jwt_secret_key) < 32:
+        raise RuntimeError("JWT_SECRET_KEY must be configured with at least 32 characters")
+    if not settings.oa_jwt_secret:
+        raise RuntimeError("OA_JWT_SECRET must be configured")

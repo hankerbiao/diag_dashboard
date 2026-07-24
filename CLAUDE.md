@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 前端 | React 19 + TypeScript + Vite + Tailwind CSS 4 | 端口 3000 |
 | 后端 | FastAPI + Motor (MongoDB 异步驱动) | 端口 8000 |
 | 数据库 | MongoDB (`10.17.154.252:27018`) | |
-| 认证 | 自建 JWT (python-jose + passlib) | 无外部认证服务依赖 |
+| 认证 | OA SSO + 应用 JWT (python-jose) | 仅开放 OA 登录 |
 | AI | OpenAI / Gemini (兼容 API) | 智能诊断推理 |
 | 知识库引擎 | RAGFlow | 文档解析与检索问答 |
 | 文档 | VitePress | `docs/` 目录 |
@@ -66,12 +66,12 @@ app/
 ├── main.py                    # FastAPI 入口, lifespan (MongoDB 连接 + 分析调度器启动)
 ├── core/
 │   ├── config.py              # Pydantic Settings (MongoDB/JWT/AI/RAGFlow/Sync 配置)
-│   ├── auth.py                # JWT 签发/验证, 密码哈希 (python-jose + passlib)
+│   ├── auth.py                # 应用 Bearer JWT 签发/验证
 │   ├── mongodb.py             # Motor 异步连接管理
 │   ├── mongodb_indexes.py     # 启动时自动创建索引 + seed 默认厂区数据
 │   └── factory_config.py      # 读取 configs/factories.yaml (后端和脚本共享)
 ├── routers/
-│   ├── auth.py                # POST /api/auth/register, /login, GET /me
+│   ├── auth.py                # POST /api/auth/oa/callback, GET /me
 │   ├── diagnosis.py           # POST /api/diagnosis/sn, /error-log/{id}
 │   ├── error_logs.py          # GET /api/error-logs/stats, /trend, /stats/yield
 │   ├── analytics.py           # GET /api/analytics/insights (看板聚合数据)
@@ -100,7 +100,7 @@ configs/
 ```
 src/
 ├── api/
-│   ├── auth.ts                # JWT 认证 API (login/register/token 管理, localStorage)
+│   ├── auth.ts                # OA 回调 + 应用 JWT 管理 (localStorage)
 │   ├── fastapi.ts             # FastAPI HTTP 客户端 (diagnosisApi, settingsApi, syncApi)
 │   └── index.ts               # 统一导出
 ├── components/
@@ -113,7 +113,7 @@ src/
 │   ├── knowledge-base/        # 知识库管理 (KnowledgeBaseTab, DocCard, DocDetailDrawer, UploadZone)
 │   └── settings/              # 设置页 (ApiConfig, KnowledgeBase)
 ├── contexts/
-│   ├── AuthContext.tsx         # 认证状态管理 (user/loading/signIn/signUp/signOut)
+│   ├── AuthContext.tsx         # OA 回调、会话恢复与退出状态管理
 │   └── ThemeContext.tsx        # 主题
 ├── hooks/                     # useChartTheme, useDebounce, useTypingAnimation
 ├── types/
@@ -129,7 +129,7 @@ src/
 ```
 浏览器 → AuthContext (localStorage JWT)
               │
-              ├── POST /api/auth/login|register → MongoDB.users
+              ├── OA springboard → POST /api/auth/oa/callback → MongoDB.users
               │
               └── fetchApi() → Authorization: Bearer <token>
                       │
@@ -147,7 +147,7 @@ src/
 
 | Collection | 核心查询字段 | 用途 |
 |-----------|-------------|------|
-| `users` | `email` (unique) | 用户认证 |
+| `users` | `itcode` (unique, sparse) | OA 用户认证与 profile |
 | `app_settings` | `user_id` (unique) | 用户设置 |
 | `devices` | `sn` (unique) | 设备信息 |
 | `error_logs` | `device_id` + `test_time` | 异常日志 |
@@ -170,7 +170,7 @@ src/
 - **RAGFlow 集成**: 知识库支持本地存储 + RAGFlow 自动同步双写。RAGFlow 为可选配置，未配置时不影响服务启动
 - **看板缓存**: `analytics_service.py` 每小时后台预计算看板聚合数据写入 MongoDB 快照，前端直接读取避免实时聚合压力
 - **MongoDB 关联策略**: 紧耦合的 1:1 关系用嵌入文档，独立查询的 1:N 用 `_id` 引用
-- **认证**: 本地 JWT 验证（`python-jose` 直接解码），无需每次请求调用外部服务
+- **认证**: OA payload 验签并按 `itcode` 落库，随后签发本地 Bearer JWT
 - **数据同步**: 独立脚本 `scripts/weaveeye_sync.py`，由 crontab/运维机定期执行，API 不触发写入
 - **ObjectId 处理**: 所有 MongoDB 自动生成的 `_id` 在 API 响应中转为字符串 `id` 字段
 - **async/await**: 全链路异步 — Motor 驱动 + httpx.AsyncClient，无同步阻塞

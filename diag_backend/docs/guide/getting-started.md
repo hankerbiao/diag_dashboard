@@ -21,7 +21,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-核心依赖见 `requirements.txt`：`fastapi`、`motor`、`openai`、`python-jose`、`passlib`、`httpx`、`PyYAML` 等。
+核心依赖见 `requirements.txt`：`fastapi`、`motor`、`openai`、`python-jose`、`httpx`、`PyYAML` 等。
 
 ## 3. 环境变量
 
@@ -31,6 +31,7 @@ pip install -r requirements.txt
 MONGODB_URI=mongodb://10.17.154.252:27018
 MONGODB_DB_NAME=diag_analysis
 JWT_SECRET_KEY=your-random-64-char-secret
+OA_JWT_SECRET=your-springboard-shared-secret
 OPENAI_API_KEY=sk-...
 OPENAI_API_URL=https://api.openai.com/v1
 AI_MODEL=gpt-4-turbo
@@ -61,13 +62,10 @@ open http://localhost:8000/docs
 
 详见 [应用生命周期](/architecture/lifecycle)。
 
-## 7. 注册用户
+## 7. 登录
 
-```bash
-curl -X POST http://localhost:8000/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"email":"dev@example.com","password":"your-password"}'
-```
+打开前端后，未登录用户会自动跳转 OA Springboard。OA 回调由前端提交到
+`POST /api/auth/oa/callback`，本项目不提供本地注册或密码登录。
 
 ## 8. 测试与文档站
 

@@ -7,7 +7,7 @@
 | **项目名称** | WeaveEye Backend |
 | **项目类型** | Python FastAPI RESTful API |
 | **技术栈** | Python 3.10+ / FastAPI / MongoDB (Motor) / OpenAI |
-| **认证方式** | 自建 JWT |
+| **认证方式** | OA SSO + 应用 Bearer JWT |
 | **数据库** | MongoDB (`10.17.154.252:27018`) |
 
 ## 核心功能模块
@@ -28,8 +28,8 @@
 - 任务管理和状态跟踪
 
 ### 4. 用户认证 (`/api/auth`)
-- 用户注册/登录
-- JWT Token 认证
+- OA 单点登录回调
+- 应用 Bearer JWT 认证
 - 用户设置管理 (`/api/settings`)
 
 ## 技术架构
@@ -39,7 +39,7 @@
 │                     FastAPI Application                  │
 ├─────────────────────────────────────────────────────────┤
 │  Routers                                                 │
-│  ├─ auth.py       │ 认证 (注册/登录/JWT)                │
+│  ├─ auth.py       │ 认证 (OA callback/JWT)             │
 │  ├─ diagnosis.py  │ 诊断 (SN诊断/异常分析)              │
 │  ├─ error_logs.py │ 异常日志统计                        │
 │  ├─ settings.py   │ 用户设置                            │
@@ -52,7 +52,7 @@
 ├─────────────────────────────────────────────────────────┤
 │  Core                                                    │
 │  ├─ config.py    │ 配置管理 (Pydantic Settings)         │
-│  ├─ auth.py      │ 密码哈希/JWT Token                   │
+│  ├─ auth.py      │ 应用 Bearer JWT                      │
 │  └─ mongodb.py   │ MongoDB 异步连接 (Motor)             │
 └─────────────────────────────────────────────────────────┘
                           │
@@ -71,7 +71,7 @@ app/
 ├── main.py                    # FastAPI 应用入口，生命周期管理
 ├── core/                      # 核心模块
 │   ├── config.py              # 配置管理（Pydantic Settings）
-│   ├── auth.py                # 密码哈希、JWT Token
+│   ├── auth.py                # 应用 Bearer JWT
 │   └── mongodb.py             # MongoDB 异步连接（Motor）
 ├── routers/                   # API 路由
 │   ├── auth.py                # 认证接口
@@ -124,6 +124,7 @@ MONGODB_DB_NAME=diag_analysis
 JWT_SECRET_KEY=your-64-character-secret-key
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=60
+OA_JWT_SECRET=replace-with-springboard-shared-secret
 
 # AI 服务
 OPENAI_API_KEY=sk-...
@@ -159,8 +160,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ### 认证 (`/api/auth`)
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/auth/register` | 用户注册 |
-| POST | `/auth/login` | 用户登录 |
+| POST | `/auth/oa/callback` | 验证 OA payload 并签发应用 JWT |
+| GET | `/auth/me` | 获取当前 OA 用户 |
 
 ### 诊断 (`/api/diagnosis`)
 | 方法 | 路径 | 说明 |
@@ -198,7 +199,6 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `pymongo>=4.9.0` | MongoDB 同步驱动 |
 | `openai>=1.10.0` | LLM API 调用 |
 | `python-jose[cryptography]>=3.3.0` | JWT 认证 |
-| `passlib[bcrypt]>=1.7.4` | 密码哈希 |
 | `pydantic>=2.5.0` | 数据验证 |
 | `pydantic-settings>=2.1.0` | 配置管理 |
 | `python-dotenv>=1.0.0` | 环境变量加载 |
