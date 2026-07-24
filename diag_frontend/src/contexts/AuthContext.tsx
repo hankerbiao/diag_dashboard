@@ -9,7 +9,7 @@ interface User {
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  signIn: (email: string, password: string) => Promise<{ error?: string }>;
+  signIn: (email: string, password: string, remember?: boolean) => Promise<{ error?: string }>;
   signUp: (email: string, password: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
 }
@@ -28,8 +28,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const signIn = async (email: string, password: string) => {
-    const result = await auth.signIn(email, password);
+  const signIn = async (email: string, password: string, remember = false) => {
+    const result = await auth.signIn(email, password, remember);
     if (result.user) {
       setUser(result.user);
       return {};

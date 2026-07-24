@@ -63,8 +63,8 @@ export default function RootCausePieChart({ data, loading }: Props) {
               outerRadius="75%"
               innerRadius="45%"
               paddingAngle={2}
-              label={({ station, count }) => {
-                const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
+              label={({ value }) => {
+                const pct = total > 0 ? ((value / total) * 100).toFixed(1) : '0.0';
                 return `${pct}%`;
               }}
               labelLine={{ stroke: textColor, strokeWidth: 1, strokeOpacity: 0.3 }}
