@@ -18,6 +18,7 @@ import {
 import type { FactorySite, DiagnosisResult as DiagnosisResultType, SnHistoryItem as SnHistoryItemType } from '../../api/fastapi';
 import { diagnosisApi } from '../../api/fastapi';
 import { useToast } from '../../contexts/ToastContext';
+import { useAuth } from '../../contexts/AuthContext';
 import DiagnosisInput from './DiagnosisInput';
 import DiagnosisResult from './DiagnosisResult';
 import DiagnosisChat, { type ChatMessage } from './DiagnosisChat';
@@ -118,6 +119,8 @@ export default function DiagnosisTab({
   onFactoryChange,
 }: DiagnosisTabProps) {
   const { toast, dismiss } = useToast();
+  const { user } = useAuth();
+  const isAdmin = user?.is_admin === true;
   const toastRef = useRef<string | null>(null);
   const [sn, setSn] = useState('');
   const [loading, setLoading] = useState(false);
@@ -154,7 +157,10 @@ export default function DiagnosisTab({
     }
     setHistoryLoading(true);
     try {
-      const res = await diagnosisApi.getSnHistoryList({ factory, limit: 20 });
+      const res = await diagnosisApi.getSnHistoryList({
+        factory: isAdmin ? undefined : factory,
+        limit: isAdmin ? 100 : 20,
+      });
       if (res.success && res.data) {
         setHistoryList(res.data.items);
         setHistoryTotal(res.data.total);
@@ -165,7 +171,7 @@ export default function DiagnosisTab({
     } finally {
       setHistoryLoading(false);
     }
-  }, [factory]);
+  }, [factory, isAdmin]);
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
   useEffect(() => () => { abortRef.current?.abort(); }, []);
@@ -433,9 +439,10 @@ export default function DiagnosisTab({
           items={historyList}
           total={historyTotal}
           factorySites={factorySites}
-          factoryLabel={factoryLabel}
+          factoryLabel={isAdmin ? '全部厂区' : factoryLabel}
           activeId={activeHistoryId}
           loading={historyLoading}
+          isAdmin={isAdmin}
           onClose={() => setHistoryExpanded(false)}
           onSelect={handleHistoryClick}
         />

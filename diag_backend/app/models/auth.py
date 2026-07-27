@@ -16,6 +16,7 @@ class OAUserResponse(BaseModel):
     name: str
     email: str | None = None
     profile: dict[str, Any] = Field(default_factory=dict)
+    is_admin: bool = False
 
 
 class OACallbackResponse(BaseModel):

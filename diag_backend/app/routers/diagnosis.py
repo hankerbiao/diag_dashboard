@@ -15,7 +15,7 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from ..core.auth import get_current_user
+from ..core.auth import get_current_user, is_admin_user
 from ..core.factory_config import get_factory_by_id, load_factories_from_yaml
 from ..core.mongodb import get_collection
 from ..models.request import (
@@ -1962,6 +1962,8 @@ async def save_sn_history(
         result = request.diagnosis_result
         doc = {
             "user_id": current_user["id"],
+            "user_itcode": current_user.get("itcode") or "",
+            "user_name": current_user.get("name") or "",
             "sn": request.sn,
             "factory": request.factory,
             "category": result.get("category", ""),
@@ -2026,7 +2028,9 @@ async def list_sn_history(
     """查询 SN 诊断历史记录列表"""
     try:
         col = get_collection("diagnosis_sn_history")
-        query: dict = {"user_id": current_user["id"]}
+        query: dict = {}
+        if not is_admin_user(current_user):
+            query["user_id"] = current_user["id"]
         if sn:
             query["sn"] = sn
         if factory:
@@ -2050,6 +2054,9 @@ async def list_sn_history(
                 confidence=d.get("confidence", 0.0),
                 summary=d.get("summary", ""),
                 created_at=d["created_at"],
+                user_id=str(d.get("user_id") or ""),
+                user_itcode=d.get("user_itcode", ""),
+                user_name=d.get("user_name", ""),
             )
             for d in docs
         ]
@@ -2077,9 +2084,10 @@ async def get_sn_history_detail(
     """查询单条诊断历史完整记录（含对话）"""
     try:
         col = get_collection("diagnosis_sn_history")
-        doc = await col.find_one(
-            {"_id": parse_object_id(history_id), "user_id": current_user["id"]}
-        )
+        query = {"_id": parse_object_id(history_id)}
+        if not is_admin_user(current_user):
+            query["user_id"] = current_user["id"]
+        doc = await col.find_one(query)
         if not doc:
             return ApiResponse(success=False, error="历史记录不存在或无权访问")
 
@@ -2095,6 +2103,9 @@ async def get_sn_history_detail(
                 updated_at=doc.get("updated_at", doc["created_at"]),
                 feedback_rating=doc.get("feedback_rating"),
                 feedback_comment=doc.get("feedback_comment"),
+                user_id=str(doc.get("user_id") or ""),
+                user_itcode=doc.get("user_itcode", ""),
+                user_name=doc.get("user_name", ""),
             ).model_dump(),
         )
     except Exception as e:

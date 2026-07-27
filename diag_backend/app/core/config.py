@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     oa_jwt_secret: str = ""
     oa_app_name: str = "diagweaveeye"
     oa_login_base_url: str = "http://tl.cooacloud.com/springboard_v3/login_proxy"
+    admin_itcodes: str = "libiao1"
 
     # Server
     host: str = "0.0.0.0"

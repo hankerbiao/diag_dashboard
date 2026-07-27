@@ -42,7 +42,16 @@ async def test_overview_requires_authentication(async_client):
 
 
 @pytest.mark.asyncio
-async def test_overview_returns_service_data(async_client, auth_headers, overview_data):
+async def test_overview_rejects_non_admin(async_client, auth_headers):
+    response = await async_client.get(
+        "/api/user-analytics/overview",
+        headers=auth_headers,
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_overview_returns_service_data(async_client, admin_auth_headers, overview_data):
     service = AsyncMock()
     service.get_overview.return_value = overview_data
 
@@ -53,7 +62,7 @@ async def test_overview_returns_service_data(async_client, auth_headers, overvie
         response = await async_client.get(
             "/api/user-analytics/overview",
             params={"days": 30, "page": 1, "limit": 10, "search": "zhang"},
-            headers=auth_headers,
+            headers=admin_auth_headers,
         )
 
     assert response.status_code == 200
@@ -69,11 +78,11 @@ async def test_overview_returns_service_data(async_client, auth_headers, overvie
 
 
 @pytest.mark.asyncio
-async def test_overview_validates_date_range(async_client, auth_headers):
+async def test_overview_validates_date_range(async_client, admin_auth_headers):
     response = await async_client.get(
         "/api/user-analytics/overview",
         params={"days": 365},
-        headers=auth_headers,
+        headers=admin_auth_headers,
     )
     assert response.status_code == 422
 

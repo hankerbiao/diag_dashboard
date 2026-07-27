@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { NavigationTab } from './types';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
-import { AuthProvider } from './contexts/AuthContext';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
 import AuthGuard from './components/auth/AuthGuard';
 import Sidebar from './components/layout/Sidebar';
@@ -19,6 +19,8 @@ const FACTORY_STORAGE_KEY = 'weaveeye:selected-factory';
 
 function AppContent() {
   const { theme } = useTheme();
+  const { user } = useAuth();
+  const isAdmin = user?.is_admin === true;
   const [activeTab, setActiveTab] = useState<NavigationTab>('diagnosis');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [factorySites, setFactorySites] = useState<FactorySite[]>([]);
@@ -52,6 +54,7 @@ function AppContent() {
   }, [activeTab]);
 
   const handleTabChange = (tab: NavigationTab) => {
+    if (tab === 'user_analytics' && !isAdmin) return;
     setActiveTab(tab);
     setSidebarOpen(false);
   };
@@ -71,6 +74,7 @@ function AppContent() {
         onTabChange={handleTabChange}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        isAdmin={isAdmin}
       />
 
       <div className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden">
@@ -96,7 +100,7 @@ function AppContent() {
           {activeTab === 'error_logs' && <ErrorLogsTab factory={factory} factorySites={factorySites} />}
           {activeTab === 'knowledge_base' && <KnowledgeBaseTab />}
           {activeTab === 'feedback' && <FeedbackManagementTab factory={factory} factorySites={factorySites} />}
-          {activeTab === 'user_analytics' && <UserAnalyticsTab />}
+          {activeTab === 'user_analytics' && isAdmin && <UserAnalyticsTab />}
           {activeTab === 'settings' && <SettingsTab />}
         </div>
 

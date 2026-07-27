@@ -5,7 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from ..core.auth import get_current_user
+from ..core.auth import get_current_user, require_admin
 from ..models.api import ApiResponse
 from ..services.user_analytics_service import get_user_analytics_service
 
@@ -29,7 +29,7 @@ async def get_user_analytics_overview(
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=5, le=50),
     search: str | None = Query(None, max_length=100),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_admin),
 ):
     data = await get_user_analytics_service().get_overview(
         days=days,

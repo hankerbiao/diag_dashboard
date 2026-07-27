@@ -63,3 +63,24 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
 def get_current_user(user_data: dict = Depends(verify_token)) -> dict:
     """获取当前用户信息"""
     return user_data
+
+
+def is_admin_user(user_data: dict) -> bool:
+    """Return whether the OA ITCode is configured as an administrator."""
+    admin_itcodes = {
+        value.strip().lower()
+        for value in settings.admin_itcodes.split(",")
+        if value.strip()
+    }
+    itcode = str(user_data.get("itcode") or "").strip().lower()
+    return bool(itcode and itcode in admin_itcodes)
+
+
+def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    """Require an administrator ITCode for a protected endpoint."""
+    if not is_admin_user(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator access required",
+        )
+    return current_user

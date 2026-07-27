@@ -15,6 +15,7 @@ export interface User {
   name: string;
   email?: string | null;
   profile?: Record<string, unknown>;
+  is_admin: boolean;
 }
 
 export interface OACallbackParams {
@@ -40,7 +41,8 @@ function parseUser(value: unknown): User {
     typeof value.itcode !== 'string' ||
     typeof value.name !== 'string' ||
     (value.email !== undefined && value.email !== null && typeof value.email !== 'string') ||
-    (value.profile !== undefined && !isRecord(value.profile))
+    (value.profile !== undefined && !isRecord(value.profile)) ||
+    (value.is_admin !== undefined && typeof value.is_admin !== 'boolean')
   ) {
     throw new Error('认证服务返回了无效的用户信息');
   }
@@ -51,6 +53,7 @@ function parseUser(value: unknown): User {
     name: value.name,
     email: value.email as string | null | undefined,
     profile: value.profile as Record<string, unknown> | undefined,
+    is_admin: value.is_admin === true,
   };
 }
 

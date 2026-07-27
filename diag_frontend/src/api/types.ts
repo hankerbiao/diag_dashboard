@@ -61,6 +61,7 @@ export interface FailedLogFile {
 export interface SnHistoryItem {
   id: string; sn: string; factory: string; category: string;
   confidence: number; summary: string; created_at: string;
+  user_id?: string; user_itcode?: string; user_name?: string;
 }
 
 export interface SnHistoryDetail {
@@ -69,6 +70,7 @@ export interface SnHistoryDetail {
   created_at: string; updated_at: string;
   feedback_rating?: DiagnosisRating;
   feedback_comment?: string;
+  user_id?: string; user_itcode?: string; user_name?: string;
 }
 
 export interface ErrorAnalysis {

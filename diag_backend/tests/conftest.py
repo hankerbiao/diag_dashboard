@@ -53,6 +53,23 @@ def auth_headers(valid_token: str) -> dict:
 
 
 @pytest.fixture
+def admin_token(test_settings: Settings) -> str:
+    """Generate a token for the default administrator ITCode."""
+    return create_access_token(
+        user_id="admin-user-id-123",
+        email="admin@example.com",
+        expires_delta=timedelta(minutes=60),
+        itcode="libiao1",
+        name="管理员",
+    )
+
+
+@pytest.fixture
+def admin_auth_headers(admin_token: str) -> dict:
+    return {"Authorization": f"Bearer {admin_token}"}
+
+
+@pytest.fixture
 def mock_mongo_collection() -> AsyncMock:
     """Mock MongoDB Collection"""
     collection = AsyncMock()

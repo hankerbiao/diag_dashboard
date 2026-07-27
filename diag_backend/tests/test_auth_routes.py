@@ -66,6 +66,7 @@ async def test_oa_callback_upserts_user_and_returns_application_jwt(async_client
         "name": "张三",
         "email": "zhangsan@example.com",
         "profile": data["user"]["profile"],
+        "is_admin": False,
     }
     app_claims = jwt.decode(
         data["access_token"],

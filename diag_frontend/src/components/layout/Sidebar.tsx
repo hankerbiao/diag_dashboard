@@ -7,17 +7,18 @@ interface SidebarProps {
   onTabChange: (tab: NavigationTab) => void;
   open: boolean;
   onClose: () => void;
+  isAdmin: boolean;
 }
 
-const navItems: { icon: React.ReactNode; label: string; tab: NavigationTab }[] = [
+const navItems: { icon: React.ReactNode; label: string; tab: NavigationTab; adminOnly?: boolean }[] = [
   { icon: <Search className="w-4 h-4" />, label: '单机深度诊断', tab: 'diagnosis' },
   { icon: <LayoutDashboard className="w-4 h-4" />, label: '批量异常看板', tab: 'error_logs' },
   { icon: <Library className="w-4 h-4" />, label: '知识库管理', tab: 'knowledge_base' },
   { icon: <MessageSquareText className="w-4 h-4" />, label: '反馈管理', tab: 'feedback' },
-  { icon: <UsersRound className="w-4 h-4" />, label: '用户数据看板', tab: 'user_analytics' },
+  { icon: <UsersRound className="w-4 h-4" />, label: '用户数据看板', tab: 'user_analytics', adminOnly: true },
 ];
 
-export default function Sidebar({ activeTab, onTabChange, open, onClose }: SidebarProps) {
+export default function Sidebar({ activeTab, onTabChange, open, onClose, isAdmin }: SidebarProps) {
   return (
     <>
       {open && (
@@ -61,7 +62,7 @@ export default function Sidebar({ activeTab, onTabChange, open, onClose }: Sideb
           >
             功能导航
           </div>
-          {navItems.map((item) => (
+          {navItems.filter((item) => !item.adminOnly || isAdmin).map((item) => (
             <NavItem
               key={item.tab}
               icon={item.icon}

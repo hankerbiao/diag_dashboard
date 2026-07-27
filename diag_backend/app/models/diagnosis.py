@@ -156,6 +156,9 @@ class SnHistoryItem(BaseModel):
     confidence: float
     summary: str
     created_at: str
+    user_id: str = ""
+    user_itcode: str = ""
+    user_name: str = ""
 
 
 class SnHistoryDetail(BaseModel):
@@ -168,3 +171,6 @@ class SnHistoryDetail(BaseModel):
     updated_at: str
     feedback_rating: Optional[str] = None
     feedback_comment: Optional[str] = None
+    user_id: str = ""
+    user_itcode: str = ""
+    user_name: str = ""

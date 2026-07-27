@@ -10,7 +10,7 @@ from jose import JWTError, jwt
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from ..core.auth import create_access_token, get_current_user
+from ..core.auth import create_access_token, get_current_user, is_admin_user
 from ..core.config import get_settings
 from ..core.mongodb import get_collection
 from ..core.utils import utc_now_iso
@@ -43,6 +43,7 @@ def _serialize_user(user: dict[str, Any]) -> OAUserResponse:
         name=name,
         email=str(email) if email else None,
         profile=profile,
+        is_admin=is_admin_user({"itcode": itcode}),
     )
 
 

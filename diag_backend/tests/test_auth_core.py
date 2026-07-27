@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from jose import jwt
 
-from app.core.auth import create_access_token, verify_token
+from app.core.auth import create_access_token, is_admin_user, require_admin, verify_token
 from app.core.config import Settings
 
 
@@ -99,3 +99,18 @@ async def test_verify_token_rejects_expired_token(test_settings: Settings):
             await verify_token(credentials)
 
     assert exc_info.value.status_code == 401
+
+
+def test_admin_itcode_matching_is_case_insensitive(test_settings: Settings):
+    configured = test_settings.model_copy(update={"admin_itcodes": "libiao1, AdminTwo"})
+    with patch("app.core.auth.settings", configured):
+        assert is_admin_user({"itcode": "LIBIAO1"}) is True
+        assert is_admin_user({"itcode": "admintwo"}) is True
+        assert is_admin_user({"itcode": "zhangsan"}) is False
+
+
+def test_require_admin_rejects_regular_user(test_settings: Settings):
+    with patch("app.core.auth.settings", test_settings):
+        with pytest.raises(HTTPException) as exc_info:
+            require_admin({"itcode": "zhangsan"})
+    assert exc_info.value.status_code == 403

@@ -22,6 +22,7 @@ interface DiagnosisHistoryModalProps {
   factoryLabel: string;
   activeId: string | null;
   loading: boolean;
+  isAdmin: boolean;
   onClose: () => void;
   onSelect: (item: SnHistoryItemType) => void;
 }
@@ -33,6 +34,7 @@ export default function DiagnosisHistoryModal({
   factoryLabel,
   activeId,
   loading,
+  isAdmin,
   onClose,
   onSelect,
 }: DiagnosisHistoryModalProps) {
@@ -46,7 +48,7 @@ export default function DiagnosisHistoryModal({
       onClick={onClose}
     >
       <div
-        className="rounded-2xl border shadow-2xl w-[720px] max-h-[70vh] flex flex-col overflow-hidden"
+        className="rounded-2xl border shadow-2xl w-[820px] max-w-[calc(100vw-32px)] max-h-[70vh] flex flex-col overflow-hidden"
         style={{ backgroundColor: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -89,6 +91,7 @@ export default function DiagnosisHistoryModal({
               <thead className="sticky top-0 z-10">
                 <tr style={{ color: 'var(--color-text-muted)', backgroundColor: 'var(--color-bg-secondary)' }}>
                   <th className="text-left font-medium whitespace-nowrap px-5 py-3 w-[96px]">时间</th>
+                  {isAdmin && <th className="text-left font-medium whitespace-nowrap px-5 py-3 w-[120px]">用户</th>}
                   <th className="text-left font-medium whitespace-nowrap px-5 py-3 w-[88px]">厂区</th>
                   <th className="text-left font-medium whitespace-nowrap px-5 py-3 w-[140px]">SN</th>
                   <th className="text-left font-medium whitespace-nowrap px-5 py-3">故障类别</th>
@@ -118,6 +121,11 @@ export default function DiagnosisHistoryModal({
                     <td className="px-5 py-3 font-mono whitespace-nowrap text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>
                       {formatTime(item.created_at)}
                     </td>
+                    {isAdmin && (
+                      <td className="px-5 py-3 max-w-[140px] truncate" title={item.user_name || item.user_itcode || item.user_id}>
+                        {item.user_name || item.user_itcode || item.user_id?.slice(-8) || '—'}
+                      </td>
+                    )}
                     <td className="px-5 py-3 text-[12px] whitespace-nowrap truncate max-w-[88px]" title={factoryDisplayName(item.factory, factorySites)}>
                       {factoryDisplayName(item.factory, factorySites)}
                     </td>
