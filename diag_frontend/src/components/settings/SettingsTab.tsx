@@ -100,7 +100,7 @@ export default function SettingsTab() {
                 </h2>
               </div>
               <p className="mt-2 text-xs leading-5" style={{ color: 'var(--color-text-muted)' }}>
-                登录、诊断、异常看板与常见问题的快速指南。
+                OA 登录、诊断、反馈、管理员看板与配置说明。
               </p>
               <button
                 type="button"
