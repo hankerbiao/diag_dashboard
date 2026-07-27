@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bot, Search, LayoutDashboard, Library, MessageSquareText, Settings, Cpu, X } from 'lucide-react';
+import { Bot, Search, LayoutDashboard, Library, MessageSquareText, Settings, Cpu, UsersRound, X } from 'lucide-react';
 import type { NavigationTab } from '../../types';
 
 interface SidebarProps {
@@ -14,6 +14,7 @@ const navItems: { icon: React.ReactNode; label: string; tab: NavigationTab }[] =
   { icon: <LayoutDashboard className="w-4 h-4" />, label: '批量异常看板', tab: 'error_logs' },
   { icon: <Library className="w-4 h-4" />, label: '知识库管理', tab: 'knowledge_base' },
   { icon: <MessageSquareText className="w-4 h-4" />, label: '反馈管理', tab: 'feedback' },
+  { icon: <UsersRound className="w-4 h-4" />, label: '用户数据看板', tab: 'user_analytics' },
 ];
 
 export default function Sidebar({ activeTab, onTabChange, open, onClose }: SidebarProps) {

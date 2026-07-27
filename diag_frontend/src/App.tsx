@@ -12,7 +12,8 @@ import ErrorLogsTab from './components/error-logs/ErrorLogsTab';
 import SettingsTab from './components/settings/SettingsTab';
 import KnowledgeBaseTab from './components/knowledge-base/KnowledgeBaseTab';
 import FeedbackManagementTab from './components/feedback/FeedbackManagementTab';
-import { analyticsApi, factoryApi, FactorySite } from './api/fastapi';
+import UserAnalyticsTab from './components/user-analytics/UserAnalyticsTab';
+import { analyticsApi, factoryApi, userAnalyticsApi, FactorySite } from './api/fastapi';
 
 const FACTORY_STORAGE_KEY = 'weaveeye:selected-factory';
 
@@ -45,6 +46,10 @@ function AppContent() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    void userAnalyticsApi.trackFeature(activeTab);
+  }, [activeTab]);
 
   const handleTabChange = (tab: NavigationTab) => {
     setActiveTab(tab);
@@ -91,6 +96,7 @@ function AppContent() {
           {activeTab === 'error_logs' && <ErrorLogsTab factory={factory} factorySites={factorySites} />}
           {activeTab === 'knowledge_base' && <KnowledgeBaseTab />}
           {activeTab === 'feedback' && <FeedbackManagementTab factory={factory} factorySites={factorySites} />}
+          {activeTab === 'user_analytics' && <UserAnalyticsTab />}
           {activeTab === 'settings' && <SettingsTab />}
         </div>
 

@@ -17,6 +17,7 @@ const TAB_TITLES: Record<NavigationTab, string> = {
   error_logs: '批量测试异常看板',
   knowledge_base: '知识库管理',
   feedback: '诊断反馈管理',
+  user_analytics: '用户数据与使用分析',
   settings: '系统管理与 AI 引擎配置',
 };
 

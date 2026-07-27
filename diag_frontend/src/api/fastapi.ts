@@ -14,6 +14,15 @@ export type {
 export { diagnosisApi } from './diagnosis';
 export { factoryApi, syncApi } from './sync';
 export { analyticsApi } from './analytics';
+export { userAnalyticsApi } from './userAnalytics';
+export type {
+  UserAnalyticsOverview,
+  UserAnalyticsSummary,
+  UserDailyUsage,
+  FeatureUsage,
+  UserUsageRow,
+  UserFeature,
+} from './userAnalytics';
 export {
   knowledgeBaseApi,
   settingsApi,

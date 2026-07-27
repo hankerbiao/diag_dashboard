@@ -11,6 +11,7 @@ from .routers import (
     knowledge_base,
     settings as settings_router,
     sync,
+    user_analytics,
 )
 from .core.config import get_settings
 from .core.logger import setup_logging
@@ -77,6 +78,7 @@ app.include_router(analytics_v2.router, prefix="/api")
 app.include_router(sync.router, prefix="/api")
 app.include_router(factories.router, prefix="/api")
 app.include_router(knowledge_base.router, prefix="/api")
+app.include_router(user_analytics.router, prefix="/api")
 
 
 # 根路径

@@ -32,6 +32,19 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
         await db["users"].create_index(
             "itcode", unique=True, sparse=True, name="idx_users_itcode"
         )
+    await db["users"].create_index("created_at", name="idx_users_created_at")
+    await db["users"].create_index("last_login_at", name="idx_users_last_login_at")
+
+    # ---- usage_events ----
+    await db["usage_events"].create_index(
+        "created_at", name="idx_usage_events_created_at"
+    )
+    await db["usage_events"].create_index(
+        [("user_id", 1), ("created_at", -1)], name="idx_usage_events_user_time"
+    )
+    await db["usage_events"].create_index(
+        [("feature", 1), ("created_at", -1)], name="idx_usage_events_feature_time"
+    )
 
     # OA assertion hashes are inserted once and expire with the upstream token.
     await db["oa_login_assertions"].create_index(
@@ -85,6 +98,9 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
     )
     await db["knowledge_documents"].create_index(
         "title", name="idx_knowledge_docs_title"
+    )
+    await db["knowledge_documents"].create_index(
+        [("user_id", 1), ("uploaded_at", -1)], name="idx_knowledge_docs_user_time"
     )
 
     # ---- test_stats_daily (预计算统计摘要) ----

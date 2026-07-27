@@ -1,4 +1,5 @@
 """OA 单点登录路由。"""
+import logging
 from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any
@@ -16,6 +17,7 @@ from ..core.utils import utc_now_iso
 from ..models.auth import OACallbackRequest, OACallbackResponse, OAUserResponse, UserResponse
 
 router = APIRouter(prefix="/auth", tags=["认证"])
+logger = logging.getLogger(__name__)
 
 
 def _profile_value(profile: dict[str, Any], *keys: str) -> str | None:
@@ -178,6 +180,7 @@ async def oa_login_callback(request: OACallbackRequest):
             "last_login_at": now,
         },
         "$setOnInsert": {"created_at": now},
+        "$inc": {"login_count": 1},
     }
     user = await _persist_oa_user(
         collection,
@@ -187,6 +190,21 @@ async def oa_login_callback(request: OACallbackRequest):
     )
     if not user:
         raise HTTPException(status_code=500, detail="Failed to persist OA user")
+
+    try:
+        await get_collection("usage_events").insert_one(
+            {
+                "user_id": str(user.get("_id") or ""),
+                "itcode": itcode,
+                "event_type": "login",
+                "feature": "login",
+                "created_at": now,
+            }
+        )
+    except Exception:
+        logger.exception(
+            "Failed to record OA login usage event", extra={"itcode": itcode}
+        )
 
     user_response = _serialize_user(user)
     access_token = create_access_token(
