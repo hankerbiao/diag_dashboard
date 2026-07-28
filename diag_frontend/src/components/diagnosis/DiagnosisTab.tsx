@@ -7,6 +7,7 @@ import {
   Building2,
   ChevronRight,
   Clock,
+  Copy,
   Cpu,
   Database,
   FileSearch,
@@ -75,6 +76,12 @@ interface LogComparisonSummary {
   sourceTruncated?: boolean;
 }
 
+interface DiagnosisErrorInfo {
+  detail?: string;
+  code?: string;
+  stage?: string;
+}
+
 function buildDiagnosisContext(result: DiagnosisResultType) {
   const lines = [
     `设备 SN: ${result.sn}`,
@@ -126,6 +133,7 @@ export default function DiagnosisTab({
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<DiagnosisResultType | null>(null);
   const [error, setError] = useState('');
+  const [errorInfo, setErrorInfo] = useState<DiagnosisErrorInfo | null>(null);
   const [persistWarning, setPersistWarning] = useState('');
   const [progress, setProgress] = useState<{ stage: string; detail: string } | null>(null);
   const [streamingToken, setStreamingToken] = useState('');
@@ -182,6 +190,7 @@ export default function DiagnosisTab({
     requestIdRef.current += 1;
     setResult(null);
     setError('');
+    setErrorInfo(null);
     setPersistWarning('');
     setProgress(null);
     setStreamingToken('');
@@ -215,6 +224,7 @@ export default function DiagnosisTab({
     setProgress(null);
     setStreamingToken('');
     setError('诊断已取消');
+    setErrorInfo(null);
   }, []);
 
   const handleDiagnose = useCallback(() => {
@@ -222,6 +232,7 @@ export default function DiagnosisTab({
     if (!snVal) return;
     if (!factory) {
       setError('请先选择运行厂区');
+      setErrorInfo(null);
       return;
     }
 
@@ -234,6 +245,7 @@ export default function DiagnosisTab({
 
     setLoading(true);
     setError('');
+    setErrorInfo(null);
     setPersistWarning('');
     setResult(null);
     setProgress({ stage: 'device', detail: '正在查询设备信息...' });
@@ -312,6 +324,7 @@ export default function DiagnosisTab({
         const errorMsg = res.error || '分析失败';
         toast('error', `诊断失败：${errorMsg}`);
         setError(errorMsg);
+        setErrorInfo({ detail: res.errorDetail, code: res.errorCode, stage: res.stage });
         setLoading(false);
         setProgress(null);
       }
@@ -325,6 +338,7 @@ export default function DiagnosisTab({
         : e instanceof Error ? e.message : '网络连接中断';
       toast('error', `诊断失败：${errorMsg}`);
       setError(errorMsg);
+      setErrorInfo(null);
       setLoading(false);
       setProgress(null);
     });
@@ -376,6 +390,7 @@ export default function DiagnosisTab({
       setActiveHistoryId(item.id);
       setHistoryId(item.id);
       setError('');
+      setErrorInfo(null);
       setPersistWarning('');
       setLoading(false);
       setProgress(null);
@@ -383,6 +398,7 @@ export default function DiagnosisTab({
       setHistoryExpanded(false);
     } else {
       setError(res.error || '加载历史记录失败');
+      setErrorInfo(null);
     }
   };
 
@@ -539,6 +555,45 @@ export default function DiagnosisTab({
                 <div className="min-w-0 flex-1">
                   <h2 className="text-[15px] font-bold" style={{ color: 'var(--color-text-primary)' }}>诊断未完成</h2>
                   <p className="mt-2 text-[13px] leading-6" style={{ color: '#dc2626' }}>{error}</p>
+                  {(errorInfo?.detail || errorInfo?.code || errorInfo?.stage) && (
+                    <div
+                      className="mt-4 overflow-hidden rounded-md border"
+                      style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-3 py-2" style={{ borderColor: 'var(--color-border)' }}>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
+                          {errorInfo.stage && <span>失败阶段：{SN_STAGE_LABELS[errorInfo.stage] || errorInfo.stage}</span>}
+                          {errorInfo.code && <span className="font-mono">错误码：{errorInfo.code}</span>}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const details = [
+                              `错误：${error}`,
+                              errorInfo.stage ? `失败阶段：${SN_STAGE_LABELS[errorInfo.stage] || errorInfo.stage}` : '',
+                              errorInfo.code ? `错误码：${errorInfo.code}` : '',
+                              errorInfo.detail ? `详细信息：\n${errorInfo.detail}` : '',
+                            ].filter(Boolean).join('\n');
+                            void navigator.clipboard.writeText(details).then(
+                              () => toast('success', '错误详情已复制'),
+                              () => toast('error', '复制失败，请手动选择错误详情'),
+                            );
+                          }}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-semibold hover:bg-black/5"
+                          style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }}
+                          title="复制错误详情"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                          复制错误详情
+                        </button>
+                      </div>
+                      {errorInfo.detail && (
+                        <pre className="custom-scrollbar max-h-56 overflow-auto whitespace-pre-wrap break-words px-3 py-3 text-[11px] leading-5" style={{ color: 'var(--color-text-secondary)' }}>
+                          {errorInfo.detail}
+                        </pre>
+                      )}
+                    </div>
+                  )}
                   <div className="mt-4"><SupportHint extra="详细说明见系统设置 → 使用文档" /></div>
                   <button
                     type="button"

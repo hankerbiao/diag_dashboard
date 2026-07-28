@@ -36,7 +36,7 @@ from ..models.diagnosis import (
     SnHistoryItem,
     SnHistoryDetail,
 )
-from ..services.llm_service import llm_service
+from ..services.llm_service import LLMResponseParseError, llm_service
 from ..services.knowledge_graph import knowledge_graph
 from ..services.log_processing.prompt_registry import PromptRegistry
 from ..services.mes_direct_service import MESDirectService, MESRequestError
@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 MAX_LOG_BYTES = 2 * 1024 * 1024
 LOG_TAIL_CHARS = 3000  # 每个日志文件取末尾最多 3000 字符，避免单行长日志导致上下文过长
 RAG_TOP_K = 10
+MAX_DIAGNOSIS_ERROR_DETAIL_CHARS = 4000
 
 # LLM 上下文窗口安全限制（为模型最大上下文留出 4096 token 余量给 system prompt 和输出）
 # 例如模型 32K → MAX_PROMPT_TOKENS ≈ 28K
@@ -59,6 +60,27 @@ ProgressMetadata = dict[str, object]
 ProgressCallback = Callable[
     [str, str, ProgressStatus, Optional[ProgressMetadata]], Awaitable[None]
 ]
+
+
+def _safe_diagnosis_error_detail(detail: object) -> str:
+    """Limit diagnostic details and mask common credential formats."""
+    text = str(detail or "").strip()
+    text = re.sub(
+        r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
+        r"\1***",
+        text,
+    )
+    text = re.sub(
+        r"(?i)((?:api[_-]?key|token|secret|password)\s*[:=]\s*)"
+        r"(?:['\"])?[^'\"\s,;}]+",
+        r"\1***",
+        text,
+    )
+    text = re.sub(r"\bsk-[A-Za-z0-9_-]{6,}\b", "sk-***", text)
+    if len(text) > MAX_DIAGNOSIS_ERROR_DETAIL_CHARS:
+        omitted = len(text) - MAX_DIAGNOSIS_ERROR_DETAIL_CHARS
+        text = f"{text[:MAX_DIAGNOSIS_ERROR_DETAIL_CHARS]}\n\n... 已截断 {omitted} 个字符"
+    return text
 
 
 class _BoundedByteCollector:
@@ -1859,6 +1881,7 @@ async def diagnose_sn_stream(
 ):
     async def event_stream():
         queue: asyncio.Queue[dict] = asyncio.Queue()
+        active_stage = "device"
 
         async def progress(
             stage: str,
@@ -1866,6 +1889,8 @@ async def diagnose_sn_stream(
             status: ProgressStatus = "running",
             metadata: Optional[ProgressMetadata] = None,
         ) -> None:
+            nonlocal active_stage
+            active_stage = stage
             await queue.put(
                 {
                     "type": "progress",
@@ -1915,6 +1940,25 @@ async def diagnose_sn_stream(
                     merged_error_log,
                 )
                 await queue.put({"type": "result", "data": response.model_dump()})
+            except LLMResponseParseError as exc:
+                logger.warning(
+                    "SN 诊断模型响应解析失败",
+                    extra={
+                        "sn": request.sn,
+                        "factory": request.factory,
+                        "stage": active_stage,
+                        "error": str(exc),
+                    },
+                )
+                await queue.put(
+                    {
+                        "type": "error",
+                        "error": str(exc),
+                        "error_detail": _safe_diagnosis_error_detail(exc.detail),
+                        "error_code": exc.error_code,
+                        "stage": active_stage,
+                    }
+                )
             except ValueError as exc:
                 logger.warning(
                     "SN 诊断参数错误",
@@ -1924,13 +1968,29 @@ async def diagnose_sn_stream(
                         "error": str(exc),
                     },
                 )
-                await queue.put({"type": "error", "error": str(exc)})
+                await queue.put(
+                    {
+                        "type": "error",
+                        "error": str(exc),
+                        "error_detail": _safe_diagnosis_error_detail(exc),
+                        "error_code": "DIAGNOSIS_INPUT_ERROR",
+                        "stage": active_stage,
+                    }
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.exception(
                     "SN 诊断失败",
                     extra={"sn": request.sn, "factory": request.factory},
                 )
-                await queue.put({"type": "error", "error": f"诊断失败: {exc}"})
+                await queue.put(
+                    {
+                        "type": "error",
+                        "error": "诊断执行异常，请查看错误详情",
+                        "error_detail": _safe_diagnosis_error_detail(exc),
+                        "error_code": "DIAGNOSIS_RUNTIME_ERROR",
+                        "stage": active_stage,
+                    }
+                )
 
         task = asyncio.create_task(run_diagnosis())
         try:

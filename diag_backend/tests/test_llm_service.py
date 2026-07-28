@@ -9,7 +9,7 @@ import httpx
 import pytest
 from openai import BadRequestError
 
-from app.services.llm_service import LLMService
+from app.services.llm_service import LLMResponseParseError, LLMService
 
 
 def _nested_config(api_key="sk-test", model="gpt-4", base_url="https://test.api.com/v1",
@@ -134,6 +134,36 @@ class TestLLMService:
         resp = service._mock_response([{"role": "user", "content": "随机内容"}])
         assert isinstance(resp, str)
         assert len(resp) > 0
+
+    def test_parse_json_response_accepts_surrounding_explanation(self):
+        service = LLMService()
+
+        result = service._parse_json_response(
+            '分析如下：\n{"category": "存储", "confidence": 0.9}\n请查收。',
+            {},
+            strict=True,
+        )
+
+        assert result == {"category": "存储", "confidence": 0.9}
+
+    def test_parse_json_response_strict_mode_exposes_raw_response(self):
+        service = LLMService()
+
+        with pytest.raises(LLMResponseParseError) as caught:
+            service._parse_json_response("not valid json", {}, strict=True)
+
+        assert str(caught.value) == "大模型返回格式异常，无法生成诊断结果"
+        assert "not valid json" in caught.value.detail
+
+    def test_parse_json_response_fallback_does_not_mutate_template(self):
+        service = LLMService()
+        fallback = {"summary": "解析失败", "suggestions": ["重试"]}
+
+        result = service._parse_json_response("not valid json", fallback)
+        result["suggestions"].append("联系支持")
+
+        assert result["analysis"] == "not valid json"
+        assert fallback == {"summary": "解析失败", "suggestions": ["重试"]}
 
     @pytest.mark.asyncio
     async def test_chat_completion_no_client(self):

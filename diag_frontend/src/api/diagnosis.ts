@@ -91,6 +91,8 @@ export const diagnosisApi = {
           meta?: DiagnosisProgressMeta;
           data?: DiagnosisResult;
           error?: string;
+          error_detail?: string;
+          error_code?: string;
         };
         if (event.type === 'progress') {
           onProgress?.(
@@ -102,7 +104,13 @@ export const diagnosisApi = {
         } else if (event.type === 'result' && event.data) {
           return { success: true, data: event.data };
         } else if (event.type === 'error') {
-          return { success: false, error: event.error || '诊断失败' };
+          return {
+            success: false,
+            error: event.error || '诊断失败',
+            errorDetail: event.error_detail,
+            errorCode: event.error_code,
+            stage: event.stage,
+          };
         }
       }
       if (done) break;

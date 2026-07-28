@@ -31,6 +31,27 @@
 
 传统异常日志分析（非流式）。
 
+## POST /api/diagnosis/sn/analyze
+
+单机 SN 深度诊断（SSE 流式）。成功时返回 `result` 事件；处理中通过
+`progress` 事件返回当前阶段。若大模型返回内容无法解析为 JSON，接口返回错误事件，
+不会生成“未知 / 50% / 解析失败”的兜底诊断结果。
+
+**错误事件：**
+
+```json
+{
+  "type": "error",
+  "error": "大模型返回格式异常，无法生成诊断结果",
+  "error_detail": "Expecting value...\n\n模型原始响应：...",
+  "error_code": "LLM_RESPONSE_PARSE_ERROR",
+  "stage": "llm"
+}
+```
+
+`error_detail` 最多返回 4000 个字符，并会脱敏常见的 API Key、Token、Secret、
+Password 和 Bearer 凭据。前端失败页展示这些字段并支持复制，不会保存失败记录。
+
 ## POST /api/diagnosis/error-log/{id}/analyze
 
 智能诊断剖析（SSE 流式）。

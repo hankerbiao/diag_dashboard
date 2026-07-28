@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from app.routers import diagnosis as diagnosis_router
+from app.services.llm_service import LLMResponseParseError
 from app.services.mes_direct_service import ServerInfo
 
 
@@ -569,6 +570,39 @@ class TestDiagnosisSN:
         )
         result = next(event["data"] for event in events if event["type"] == "result")
         assert "ERROR disk offline" in result["merged_error_log"]
+
+    @pytest.mark.asyncio
+    async def test_diagnose_sn_stream_returns_parse_error_details(
+        self, async_client, auth_headers: dict
+    ):
+        async def fake_gather(_sn, _factory, on_progress=None):
+            await on_progress("ragflow", "知识库检索完成")
+            return ({}, [], [], [], [], "", [], [], "")
+
+        parse_error = LLMResponseParseError(
+            "invalid response with api_key=secret-value",
+            "Expecting value: line 1 column 1",
+        )
+        with patch(
+            "app.routers.diagnosis._gather_sn_data", new=AsyncMock(side_effect=fake_gather)
+        ), patch("app.routers.diagnosis.llm_service") as mock_llm:
+            mock_llm.diagnose_sn = AsyncMock(side_effect=parse_error)
+            response = await async_client.post(
+                "/api/diagnosis/sn/analyze",
+                headers=auth_headers,
+                json={"sn": "SN123", "factory": "Factory-A"},
+            )
+
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: ")
+        ]
+        error = next(event for event in events if event["type"] == "error")
+        assert error["error_code"] == "LLM_RESPONSE_PARSE_ERROR"
+        assert error["stage"] == "llm"
+        assert "invalid response" in error["error_detail"]
+        assert "secret-value" not in error["error_detail"]
 
 
 class TestDiagnosisErrorLog:

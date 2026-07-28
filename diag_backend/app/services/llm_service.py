@@ -3,6 +3,7 @@ import logging
 import math
 import re
 import time
+from copy import deepcopy
 from string import Formatter
 from typing import Awaitable, Callable, Literal, Optional
 
@@ -15,6 +16,20 @@ from .log_extractor import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class LLMResponseParseError(ValueError):
+    """Raised when a diagnosis response cannot be decoded into a JSON object."""
+
+    error_code = "LLM_RESPONSE_PARSE_ERROR"
+
+    def __init__(self, response: str, reason: str):
+        raw_response = response.strip() if isinstance(response, str) else str(response)
+        if not raw_response:
+            raw_response = "<空响应>"
+        self.detail = f"{reason}\n\n模型原始响应：\n{raw_response}"
+        super().__init__("大模型返回格式异常，无法生成诊断结果")
+
 
 DEVICE_INFO_TPL = """## 设备信息
 - 设备 SN: {sn}
@@ -794,12 +809,27 @@ class LLMService:
         match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
         return match.group(1).strip() if match else text.strip()
 
-    def _parse_json_response(self, response: str, fallback: dict) -> dict:
+    def _parse_json_response(
+        self, response: str, fallback: dict, *, strict: bool = False
+    ) -> dict:
         try:
-            return json.loads(self._extract_json(response))
-        except json.JSONDecodeError:
-            fallback["analysis"] = response
-            return fallback
+            text = self._extract_json(response)
+            try:
+                result = json.loads(text)
+            except json.JSONDecodeError:
+                object_start = text.find("{")
+                if object_start < 0:
+                    raise
+                result, _ = json.JSONDecoder().raw_decode(text[object_start:])
+            if not isinstance(result, dict):
+                raise ValueError("JSON 顶层结构必须是对象")
+            return result
+        except (json.JSONDecodeError, ValueError) as exc:
+            if strict:
+                raise LLMResponseParseError(response, str(exc)) from exc
+            result = deepcopy(fallback)
+            result["analysis"] = response
+            return result
 
     # ------------------------------------------------------------------
     # 诊断业务方法
@@ -828,6 +858,7 @@ class LLMService:
             await self.chat_completion([{"role": "system", "content": "硬件诊断工程师"},
                                         {"role": "user", "content": prompt}]),
             self.SN_DIAGNOSIS_FALLBACK,
+            strict=True,
         )
 
     async def diagnose_sn_stream(self, sn: str, device_info: dict, test_logs: list[dict],
@@ -843,6 +874,7 @@ class LLMService:
                 token_cb,
             ),
             self.SN_DIAGNOSIS_FALLBACK,
+            strict=True,
         )
 
     async def follow_up_question(self, question: str, diagnosis_context: str) -> str:
