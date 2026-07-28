@@ -9,7 +9,7 @@ factories:
   - factory_id: tianjin2
     name: 天津二期厂区
     base_url: http://10.2.68.103
-    log_base_url: http://10.2.68.104
+    log_base_url: http://10.2.68.104/log
 
   - factory_id: tianjin3
     name: 天津三期厂区
