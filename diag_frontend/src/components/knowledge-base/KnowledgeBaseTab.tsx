@@ -8,6 +8,7 @@ import { knowledgeBaseApi, KnowledgeDoc } from '../../api/fastapi';
 import UploadZone from './UploadZone';
 import DocDetailDrawer from './DocDetailDrawer';
 import SearchTest from './SearchTest';
+import ConfiguredKnowledgeDocuments from './ConfiguredKnowledgeDocuments';
 
 interface DocDisplay {
   id: string;
@@ -78,6 +79,8 @@ export default function KnowledgeBaseTab() {
   const [detailDoc, setDetailDoc] = useState<KnowledgeDoc | null>(null);
   const [chunkCount, setChunkCount] = useState(0);
   const [showSearch, setShowSearch] = useState(false);
+  const [listView, setListView] = useState<'configured' | 'uploads'>('configured');
+  const [ragflowRefreshKey, setRagflowRefreshKey] = useState(0);
 
   const limit = 20;
 
@@ -107,15 +110,6 @@ export default function KnowledgeBaseTab() {
     loadDocs(1);
   }, [search]);
 
-  // 获取真实切片数
-  useEffect(() => {
-    knowledgeBaseApi.getRagflowStatus().then((res) => {
-      if (res.success && res.data?.dataset) {
-        setChunkCount(res.data.dataset.chunk_count);
-      }
-    });
-  }, []);
-
   useEffect(() => {
     if (page !== 1) loadDocs(page);
   }, [page]);
@@ -128,18 +122,11 @@ export default function KnowledgeBaseTab() {
     return () => clearInterval(timer);
   }, [docs, page, loadDocs]);
 
-  const refreshChunks = () => {
-    knowledgeBaseApi.getRagflowStatus().then((res) => {
-      if (res.success && res.data?.dataset) {
-        setChunkCount(res.data.dataset.chunk_count);
-      }
-    });
-  };
-
   const handleUploaded = () => {
     setPage(1);
     loadDocs(1);
-    refreshChunks();
+    setListView('configured');
+    setRagflowRefreshKey((key) => key + 1);
   };
 
   const handleDelete = async (docId: string) => {
@@ -147,7 +134,7 @@ export default function KnowledgeBaseTab() {
       await knowledgeBaseApi.delete(docId);
       setPage(1);
       loadDocs(1);
-      refreshChunks();
+      setRagflowRefreshKey((key) => key + 1);
     } catch {
       setError('删除失败');
     }
@@ -159,7 +146,12 @@ export default function KnowledgeBaseTab() {
     setDetailDoc(null);
     setPage(1);
     loadDocs(1);
+    setRagflowRefreshKey((key) => key + 1);
   };
+
+  const handleChunkCountChange = useCallback((count: number) => {
+    setChunkCount(count);
+  }, []);
 
   const totalPages = Math.ceil(total / limit);
 
@@ -224,7 +216,33 @@ export default function KnowledgeBaseTab() {
           </div>
         )}
 
+        <div className="flex border-b" style={{ borderColor: 'var(--color-border)' }} role="tablist" aria-label="知识库文档视图">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={listView === 'configured'}
+            onClick={() => setListView('configured')}
+            className="relative px-4 py-2.5 text-[13px] font-bold"
+            style={{ color: listView === 'configured' ? 'var(--color-accent)' : 'var(--color-text-secondary)' }}
+          >
+            当前知识库集合
+            {listView === 'configured' && <span className="absolute inset-x-0 bottom-[-1px] h-0.5" style={{ backgroundColor: 'var(--color-accent)' }} />}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={listView === 'uploads'}
+            onClick={() => setListView('uploads')}
+            className="relative px-4 py-2.5 text-[13px] font-bold"
+            style={{ color: listView === 'uploads' ? 'var(--color-accent)' : 'var(--color-text-secondary)' }}
+          >
+            WeaveEye 上传记录 ({total})
+            {listView === 'uploads' && <span className="absolute inset-x-0 bottom-[-1px] h-0.5" style={{ backgroundColor: 'var(--color-accent)' }} />}
+          </button>
+        </div>
+
         {/* ─── Document List ─── */}
+        {listView === 'uploads' ? (
         <div className="rounded-xl shadow-sm border flex flex-col min-h-[300px]"
           style={{ backgroundColor: 'var(--color-bg-secondary)', borderColor: 'var(--color-border)' }}>
           {/* List Header + Filters */}
@@ -431,6 +449,12 @@ export default function KnowledgeBaseTab() {
             </div>
           )}
         </div>
+        ) : (
+          <ConfiguredKnowledgeDocuments
+            refreshKey={ragflowRefreshKey}
+            onChunkCountChange={handleChunkCountChange}
+          />
+        )}
       </div>
 
       {/* Detail Drawer */}

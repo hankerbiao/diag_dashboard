@@ -140,3 +140,103 @@ async def test_ragflow_status_aggregates_retrieval_datasets(
         "default-id",
         "repair-id",
     ]
+
+
+@pytest.mark.asyncio
+async def test_list_ragflow_documents_returns_configured_dataset_documents(
+    async_client,
+    auth_headers: dict,
+):
+    with patch(
+        "app.routers.knowledge_base.ragflow_service.resolve_retrieval_dataset_ids",
+        new=AsyncMock(return_value=["default-id", "repair-id"]),
+    ), patch(
+        "app.routers.knowledge_base.ragflow_service.list_datasets",
+        new=AsyncMock(
+            return_value=[
+                {"id": "default-id", "name": "default", "chunk_count": 8},
+                {"id": "repair-id", "name": "repairs", "chunk_count": 12},
+            ]
+        ),
+    ), patch(
+        "app.routers.knowledge_base.ragflow_service.list_documents",
+        new=AsyncMock(
+            side_effect=[
+                [
+                    {
+                        "id": "doc-1",
+                        "name": "SOP.pdf",
+                        "size": 2048,
+                        "chunk_num": 4,
+                        "token_num": 1200,
+                        "run": "DONE",
+                        "progress": 1,
+                        "create_date": "2026-07-27 10:00:00",
+                        "update_date": "2026-07-27 10:05:00",
+                    }
+                ],
+                [
+                    {
+                        "id": "doc-2",
+                        "name": "repair.md",
+                        "size": "512",
+                        "chunk_num": "2",
+                        "run": "RUNNING",
+                        "progress": 0.4,
+                    }
+                ],
+            ]
+        ),
+    ):
+        response = await async_client.get(
+            "/api/knowledge-base/ragflow/documents",
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200
+    body = response.json()["data"]
+    assert body["enabled"] is True
+    assert body["total"] == 2
+    assert body["datasets"] == [
+        {"id": "default-id", "name": "default", "document_count": 1, "chunk_count": 8},
+        {"id": "repair-id", "name": "repairs", "document_count": 1, "chunk_count": 12},
+    ]
+    assert body["items"][0] == {
+        "id": "doc-1",
+        "dataset_id": "default-id",
+        "dataset_name": "default",
+        "name": "SOP.pdf",
+        "format": "pdf",
+        "size_bytes": 2048,
+        "chunk_count": 4,
+        "token_count": 1200,
+        "status": "parsed",
+        "progress": 1.0,
+        "created_at": "2026-07-27 10:00:00",
+        "updated_at": "2026-07-27 10:05:00",
+    }
+    assert body["items"][1]["dataset_name"] == "repairs"
+    assert body["items"][1]["status"] == "parsing"
+
+
+@pytest.mark.asyncio
+async def test_list_ragflow_documents_handles_unconfigured_ragflow(
+    async_client,
+    auth_headers: dict,
+):
+    with patch(
+        "app.routers.knowledge_base.ragflow_service.resolve_retrieval_dataset_ids",
+        new=AsyncMock(return_value=[]),
+    ):
+        response = await async_client.get(
+            "/api/knowledge-base/ragflow/documents",
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "enabled": False,
+        "datasets": [],
+        "items": [],
+        "total": 0,
+    }

@@ -6,7 +6,8 @@ export type {
   ErrorAnalysis, DiagnosisCache, FactorySite, SyncServer, SyncTestDetail,
   PaginatedResponse,
   FaultCategoryItem, YieldTrendItem, StationFailureItem, DecisionDistributionItem,
-  ModelDefectItem, DashboardInsights, KnowledgeDoc, GlobalAiConfig,
+  ModelDefectItem, DashboardInsights, KnowledgeDoc, RagflowDatasetSummary,
+  RagflowDocument, RagflowDocumentsResponse, GlobalAiConfig,
   DiagnosisFeedback, DiagnosisFeedbackParams, DiagnosisRating, FeedbackStatus,
   FeedbackSummary, FeedbackListResponse,
   LogExtractionPrompt, MachineModelsResponse, LogExtractionPromptsResponse

@@ -121,6 +121,35 @@ export interface KnowledgeDoc {
   status: string; tags: string[]; uploaded_at: string;
 }
 
+export interface RagflowDatasetSummary {
+  id: string;
+  name: string;
+  document_count: number;
+  chunk_count: number;
+}
+
+export interface RagflowDocument {
+  id: string;
+  dataset_id: string;
+  dataset_name: string;
+  name: string;
+  format: string;
+  size_bytes: number;
+  chunk_count: number;
+  token_count: number;
+  status: string;
+  progress: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RagflowDocumentsResponse {
+  enabled: boolean;
+  datasets: RagflowDatasetSummary[];
+  items: RagflowDocument[];
+  total: number;
+}
+
 export interface GlobalAiConfig {
   api_key: string; base_url: string; model: string;
   temperature: number | null; max_tokens: number | null;

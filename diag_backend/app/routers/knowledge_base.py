@@ -28,6 +28,40 @@ def _doc_response(doc: dict) -> KnowledgeDocResponse:
     )
 
 
+def _safe_number(value, cast, default=0):
+    try:
+        return cast(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _ragflow_doc_response(dataset_id: str, dataset_name: str, doc: dict) -> dict:
+    name = str(doc.get("name") or doc.get("location") or "未命名文档")
+    format_name = name.rsplit(".", 1)[-1].lower() if "." in name else str(doc.get("type") or "")
+    raw_status = str(doc.get("run") or doc.get("status") or "UNSTART").upper()
+    progress = max(0.0, min(1.0, _safe_number(doc.get("progress"), float, 0.0)))
+    return {
+        "id": str(doc.get("id") or ""),
+        "dataset_id": dataset_id,
+        "dataset_name": dataset_name,
+        "name": name,
+        "format": format_name,
+        "size_bytes": _safe_number(doc.get("size"), int),
+        "chunk_count": _safe_number(doc.get("chunk_num", doc.get("chunk_count")), int),
+        "token_count": _safe_number(doc.get("token_num", doc.get("token_count")), int),
+        "status": ragflow_service.map_status(raw_status),
+        "progress": progress,
+        "created_at": str(doc.get("create_date") or doc.get("created_at") or ""),
+        "updated_at": str(
+            doc.get("update_date")
+            or doc.get("updated_at")
+            or doc.get("create_date")
+            or doc.get("created_at")
+            or ""
+        ),
+    }
+
+
 def _build_doc(file: UploadFile, title: Optional[str], description: Optional[str],
                tags: Optional[str], user_id: str, knowledge_type: str = "") -> dict:
     ext = (file.filename.rsplit(".", 1)[-1] if "." in file.filename else "").lower()
@@ -227,6 +261,61 @@ async def ragflow_status(current_user: dict = Depends(get_current_user)):
         })
     except Exception as e:
         return ApiResponse(success=True, data={"enabled": True, "error": str(e), "dataset": None})
+
+
+@router.get("/ragflow/documents")
+async def list_ragflow_documents(current_user: dict = Depends(get_current_user)):
+    """列出当前配置为诊断检索源的 RAGFlow 数据集及其中的文档。"""
+    try:
+        dataset_ids = await ragflow_service.resolve_retrieval_dataset_ids()
+        if not dataset_ids:
+            return ApiResponse(
+                success=True,
+                data={"enabled": False, "datasets": [], "items": [], "total": 0},
+            )
+
+        datasets = await ragflow_service.list_datasets(page_size=200)
+        dataset_by_id = {
+            str(dataset.get("id")): dataset
+            for dataset in datasets
+            if dataset.get("id")
+        }
+        document_lists = await asyncio.gather(
+            *(
+                ragflow_service.list_documents(dataset_id, page_size=1000)
+                for dataset_id in dataset_ids
+            )
+        )
+
+        dataset_summaries = []
+        items = []
+        for dataset_id, documents in zip(dataset_ids, document_lists):
+            dataset = dataset_by_id.get(dataset_id, {})
+            dataset_name = str(dataset.get("name") or dataset_id)
+            dataset_summaries.append(
+                {
+                    "id": dataset_id,
+                    "name": dataset_name,
+                    "document_count": len(documents),
+                    "chunk_count": _safe_number(dataset.get("chunk_count"), int),
+                }
+            )
+            items.extend(
+                _ragflow_doc_response(dataset_id, dataset_name, document)
+                for document in documents
+            )
+
+        return ApiResponse(
+            success=True,
+            data={
+                "enabled": True,
+                "datasets": dataset_summaries,
+                "items": items,
+                "total": len(items),
+            },
+        )
+    except Exception as e:
+        return ApiResponse(success=False, error=f"RAGFlow 文档列表加载失败: {e}")
 
 
 @router.post("/search")

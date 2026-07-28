@@ -1,6 +1,13 @@
 import { fetchApi, API_BASE_URL } from './fetch';
 import { getAccessToken } from './auth';
-import type { KnowledgeDoc, GlobalAiConfig, MachineModelsResponse, LogExtractionPromptsResponse, LogExtractionPrompt } from './types';
+import type {
+  GlobalAiConfig,
+  KnowledgeDoc,
+  LogExtractionPrompt,
+  LogExtractionPromptsResponse,
+  MachineModelsResponse,
+  RagflowDocumentsResponse,
+} from './types';
 
 export interface SearchReference { chunk_id: string; content: string; similarity: number; doc_name: string; }
 export interface KnowledgeSearchResult { references: SearchReference[]; }
@@ -73,6 +80,9 @@ export const knowledgeBaseApi = {
       dataset: DatasetSummary | null;
       datasets?: DatasetSummary[];
     }>('/api/knowledge-base/ragflow/status');
+  },
+  async listRagflowDocuments() {
+    return fetchApi<RagflowDocumentsResponse>('/api/knowledge-base/ragflow/documents');
   },
 };
 
