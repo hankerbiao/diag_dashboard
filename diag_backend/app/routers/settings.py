@@ -12,6 +12,7 @@ from ..models.request import (
     AiModelConnectivityTestRequest,
     GlobalAiConfigUpdateRequest,
     LogExtractionPromptRequest,
+    RuntimeConfigUpdateRequest,
 )
 from ..models.api import ApiResponse
 from ..core.auth import get_current_user
@@ -137,6 +138,68 @@ async def update_global_ai_config(
 
         return ApiResponse(success=True, message="AI 配置已更新，LLM 服务已热加载")
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/runtime-config", response_model=ApiResponse)
+async def get_runtime_config(current_user: dict = Depends(get_current_user)):
+    """获取运行时性能配置（日志提取并发）及默认值。"""
+    try:
+        from ..services.runtime_config_service import DEFAULTS, DOC_ID, runtime_config_service
+
+        config = await runtime_config_service.get()
+        meta = {"updated_at": "", "updated_by": ""}
+        try:
+            col = get_collection("global_app_config")
+            doc = await col.find_one({"_id": DOC_ID})
+            if doc:
+                meta["updated_at"] = doc.get("updated_at", "")
+                meta["updated_by"] = doc.get("updated_by", "")
+        except Exception:  # noqa: BLE001
+            pass
+        return ApiResponse(
+            success=True,
+            data={
+                "config": config,
+                "defaults": dict(DEFAULTS),
+                "generation": runtime_config_service.generation,
+                **meta,
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/runtime-config", response_model=ApiResponse)
+async def update_runtime_config(
+    request: RuntimeConfigUpdateRequest, current_user: dict = Depends(get_current_user)
+):
+    """更新运行时性能配置（日志提取并发）并实时生效。"""
+    try:
+        from ..services.runtime_config_service import runtime_config_service
+
+        values = {}
+        if request.per_request_concurrency is not None:
+            values["per_request_concurrency"] = request.per_request_concurrency
+        if request.global_concurrency is not None:
+            values["global_concurrency"] = request.global_concurrency
+
+        if not values:
+            return ApiResponse(
+                success=True,
+                data={"config": await runtime_config_service.get()},
+                message="无变更",
+            )
+
+        config = await runtime_config_service.apply_update(values)
+        return ApiResponse(
+            success=True,
+            data={"config": config},
+            message="并发配置已更新，对新的诊断请求实时生效",
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

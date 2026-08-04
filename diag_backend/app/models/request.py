@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Literal, Optional
 
 
@@ -82,6 +82,25 @@ class LogExtractionPromptRequest(BaseModel):
     model: str = Field(..., min_length=1)
     system_prompt: str = Field(..., min_length=1)
     user_template: str = Field(..., min_length=1)
+
+
+class RuntimeConfigUpdateRequest(BaseModel):
+    """运行时性能配置更新（日志提取并发参数，保存后实时生效）。"""
+
+    per_request_concurrency: Optional[int] = Field(
+        None, ge=1, le=64, description="单请求内并发提取段数"
+    )
+    global_concurrency: Optional[int] = Field(
+        None, ge=1, le=128, description="进程级全局并发提取上限"
+    )
+
+    @model_validator(mode="after")
+    def _check_relation(self) -> "RuntimeConfigUpdateRequest":
+        per = self.per_request_concurrency
+        glo = self.global_concurrency
+        if per is not None and glo is not None and glo < per:
+            raise ValueError("全局并发上限不能小于单请求并发")
+        return self
 
 
 class ReAnalyzeRequest(BaseModel):

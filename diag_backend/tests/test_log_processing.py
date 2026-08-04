@@ -6,6 +6,7 @@ log_processing 包单元测试 — 分段、并发提取扁平化、未配置 AI
 """
 import asyncio
 import inspect
+from typing import ClassVar
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -20,6 +21,18 @@ from app.services.log_processing.segmenter import LogSegment
 from app.services.log_processing.ai_extractor import llm_service as ae_llm
 from app.services.log_processing import llm_service as lp_llm
 from app.services.log_processing.prompt_registry import DEFAULT_ID
+
+
+@pytest.fixture(autouse=True)
+def _mock_runtime_config(monkeypatch):
+    """隔离运行时配置：process_log 的并发解析不依赖真实 MongoDB。"""
+    from app.services.runtime_config_service import runtime_config_service
+
+    async def fake_get():
+        return {"per_request_concurrency": 8, "global_concurrency": 16}
+
+    monkeypatch.setattr(runtime_config_service, "get", fake_get)
+    yield
 
 
 def _make_text(lines: int, per_line: int = 10) -> str:
@@ -209,8 +222,9 @@ class TestLogPreprocessor:
 
 
 class TestAILogExtractor:
-    def test_defaults_to_eight_way_concurrency(self):
-        assert inspect.signature(process_log).parameters["concurrency"].default == 8
+    def test_concurrency_default_resolved_from_runtime_config(self):
+        # 默认参数为 None：由运行时配置 per_request_concurrency 解析（兜底 8）
+        assert inspect.signature(process_log).parameters["concurrency"].default is None
         assert AILogExtractor().concurrency == 8
 
     def test_flatten_structured(self):
@@ -250,6 +264,46 @@ class TestAILogExtractor:
 
 
 class TestProcessLog:
+    @pytest.mark.asyncio
+    async def test_uses_runtime_config_concurrency(self):
+        """未显式传 concurrency 时读取运行时配置 per_request_concurrency。"""
+        from app.services.runtime_config_service import runtime_config_service
+
+        fake_result = {
+            "errors": [], "summary": "ok", "has_critical_errors": False,
+            "suggested_root_cause": "",
+        }
+        default_prompt = {
+            "model": DEFAULT_ID,
+            "system_prompt": "sys",
+            "user_template": "log={log_text}",
+        }
+
+        class _SpyExtractor(AILogExtractor):
+            instances: ClassVar[list] = []
+
+            def __init__(self, concurrency: int = 8, **kwargs):
+                super().__init__(concurrency=concurrency, **kwargs)
+                self.instances.append(concurrency)
+
+        with patch.object(
+            lp_llm, "_ensure_configured", new=AsyncMock()
+        ), patch.object(
+            __import__("app.services.log_processing.prompt_registry", fromlist=["PromptRegistry"]).PromptRegistry,
+            "get_prompt",
+            new=AsyncMock(return_value=default_prompt),
+        ), patch.object(
+            ae_llm, "extract_log_with_llm", new=AsyncMock(return_value=fake_result)
+        ), patch.object(
+            runtime_config_service, "get",
+            new=AsyncMock(return_value={"per_request_concurrency": 4, "global_concurrency": 16}),
+        ), patch(
+            "app.services.log_processing.AILogExtractor", _SpyExtractor
+        ):
+            await process_log("ERROR x\n" * 120, segment_chars=60)
+
+        assert _SpyExtractor.instances[-1] == 4
+
     @pytest.mark.asyncio
     async def test_fallback_when_ai_unavailable(self):
         """AI 未配置时回退编码级提取且 ai_extracted=False"""

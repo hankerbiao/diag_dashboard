@@ -160,6 +160,19 @@ export interface GlobalAiConfig {
   extraction_max_tokens: number | null; extraction_timeout: number | null;
 }
 
+export interface RuntimeConfig {
+  per_request_concurrency: number;
+  global_concurrency: number;
+}
+
+export interface RuntimeConfigResponse {
+  config: RuntimeConfig;
+  defaults: RuntimeConfig;
+  generation: number;
+  updated_at?: string;
+  updated_by?: string;
+}
+
 export interface LogExtractionPrompt {
   model: string;
   is_default: boolean;

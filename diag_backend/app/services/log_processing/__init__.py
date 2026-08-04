@@ -53,7 +53,7 @@ async def process_log(
     prompt_config: Optional[dict] = None,
     segment_chars: Optional[int] = None,
     overlap: int = 200,
-    concurrency: int = 8,
+    concurrency: Optional[int] = None,
     mode: str = "balanced",
     on_progress: Optional[Callable[[str, str], Awaitable[None]]] = None,
 ) -> dict:
@@ -66,7 +66,8 @@ async def process_log(
         prompt_config: 调用方已解析的提取 prompt；未传时按 machine_model 查询
         segment_chars: 每段字符预算；None 时按提取模型上下文窗口自动推算
         overlap: 段间重叠字符数
-        concurrency: 并发提取段落数
+        concurrency: 并发提取段落数；None 时读取运行时配置
+            （per_request_concurrency，设置页可实时调整）
         mode: 编码级兜底提取模式（light/balanced/thorough）
 
     Returns:
@@ -77,6 +78,16 @@ async def process_log(
         }
     """
     started_at = perf_counter()
+
+    # 并发数：显式传参优先，否则读运行时配置（DB 不可达时回退默认 8）
+    if concurrency is None:
+        try:
+            from ..runtime_config_service import runtime_config_service
+
+            concurrency = (await runtime_config_service.get())["per_request_concurrency"]
+        except Exception:  # noqa: BLE001
+            concurrency = 8
+    concurrency = max(1, int(concurrency))
 
     async def _progress(stage: str, detail: str) -> None:
         if on_progress:

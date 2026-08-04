@@ -1,6 +1,6 @@
 import { useState, useEffect, useImperativeHandle, forwardRef, type ReactNode } from 'react';
-import { Activity, Brain, CheckCircle2, Clock, Key, Link2, Loader2, Sliders, Thermometer, XCircle, Zap } from 'lucide-react';
-import { settingsApi, type AiConfigDraft, type AiConnectivityResult } from '../../api/fastapi';
+import { Activity, Brain, CheckCircle2, Clock, Gauge, Key, Layers, Link2, Loader2, Sliders, Thermometer, XCircle, Zap } from 'lucide-react';
+import { settingsApi, type AiConfigDraft, type AiConnectivityResult, type RuntimeConfig } from '../../api/fastapi';
 
 export interface ApiConfigHandle {
   save: () => Promise<boolean>;
@@ -128,6 +128,9 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
     const [extractionBaseUrl, setExtractionBaseUrl] = useState('');
     const [extractionModel, setExtractionModel] = useState('');
     const [extractionTimeout, setExtractionTimeout] = useState<number | null>(null);
+    const [perRequestConcurrency, setPerRequestConcurrency] = useState<number | null>(null);
+    const [globalConcurrency, setGlobalConcurrency] = useState<number | null>(null);
+    const [runtimeDefaults, setRuntimeDefaults] = useState<RuntimeConfig | null>(null);
 
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -151,6 +154,16 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
       }).catch(() => {
         onErrorMessage?.('AI 配置加载失败，已使用默认空配置');
       }).finally(() => setLoading(false));
+
+      settingsApi.getRuntimeConfig().then((resp) => {
+        if (resp.success && resp.data) {
+          setPerRequestConcurrency(resp.data.config.per_request_concurrency);
+          setGlobalConcurrency(resp.data.config.global_concurrency);
+          setRuntimeDefaults(resp.data.defaults);
+        }
+      }).catch(() => {
+        // 并发配置加载失败不阻塞主表单
+      });
     }, [onErrorMessage]);
 
     const buildConfigDraft = (): AiConfigDraft => {
@@ -197,12 +210,27 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
         setSaving(true);
         try {
           const resp = await settingsApi.updateAiConfig(buildConfigDraft());
-          if (resp.success) {
-            onSuccessMessage?.('AI 大模型配置已更新');
-            return true;
+          if (!resp.success) {
+            onErrorMessage?.(resp.error || '保存失败');
+            return false;
           }
-          onErrorMessage?.(resp.error || '保存失败');
-          return false;
+          // 并发配置：加载成功才提交；本地先校验 global >= per_request
+          if (perRequestConcurrency !== null && globalConcurrency !== null) {
+            if (globalConcurrency < perRequestConcurrency) {
+              onErrorMessage?.('全局并发上限不能小于单请求并发');
+              return false;
+            }
+            const runtimeResp = await settingsApi.updateRuntimeConfig({
+              per_request_concurrency: perRequestConcurrency,
+              global_concurrency: globalConcurrency,
+            });
+            if (!runtimeResp.success) {
+              onErrorMessage?.(runtimeResp.error || '并发配置保存失败');
+              return false;
+            }
+          }
+          onSuccessMessage?.('AI 大模型配置已更新');
+          return true;
         } catch {
           onErrorMessage?.('网络错误，保存失败');
           return false;
@@ -372,6 +400,36 @@ const ApiConfig = forwardRef<ApiConfigHandle, ApiConfigProps>(
                 />
               </button>
             </div>
+          </div>
+
+          <div className="space-y-4 border-t pt-5" style={{ borderColor: 'var(--color-border)' }}>
+            <SectionTitle
+              icon={<Gauge className="h-4 w-4" />}
+              title="日志提取并发"
+              description="控制日志分段并行调用提取模型的数量。保存后对进行中的诊断从下一请求开始实时生效。"
+              badge="实时生效"
+            />
+            <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
+              <NumberField
+                label="单请求并发"
+                value={perRequestConcurrency}
+                onChange={setPerRequestConcurrency}
+                placeholder={String(runtimeDefaults?.per_request_concurrency ?? 8)}
+                min={1}
+                icon={<Layers className="h-3.5 w-3.5" />}
+              />
+              <NumberField
+                label="全局并发上限"
+                value={globalConcurrency}
+                onChange={setGlobalConcurrency}
+                placeholder={String(runtimeDefaults?.global_concurrency ?? 16)}
+                min={1}
+                icon={<Gauge className="h-3.5 w-3.5" />}
+              />
+            </div>
+            <p className="text-[11px] leading-5" style={mutedStyle}>
+              全局上限为所有诊断请求共享的进程级并发，需 ≥ 单请求并发；调大可缩短大批量诊断耗时，但会提高提取模型的限流风险。
+            </p>
           </div>
         </div>
       </section>

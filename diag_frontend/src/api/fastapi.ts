@@ -8,6 +8,7 @@ export type {
   FaultCategoryItem, YieldTrendItem, StationFailureItem, DecisionDistributionItem,
   ModelDefectItem, DashboardInsights, KnowledgeDoc, RagflowDatasetSummary,
   RagflowDocument, RagflowDocumentsResponse, GlobalAiConfig,
+  RuntimeConfig, RuntimeConfigResponse,
   DiagnosisFeedback, DiagnosisFeedbackParams, DiagnosisRating, FeedbackStatus,
   FeedbackSummary, FeedbackListResponse,
   LogExtractionPrompt, MachineModelsResponse, LogExtractionPromptsResponse

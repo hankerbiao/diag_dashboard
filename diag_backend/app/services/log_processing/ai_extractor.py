@@ -19,24 +19,44 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..llm_service import llm_service
 from ..log_extractor import extract_log_context
+from .dynamic_semaphore import DynamicSemaphore
 from .segmenter import LogSegment
 
 logger = logging.getLogger(__name__)
 
 GLOBAL_EXTRACTION_CONCURRENCY = 16
 MAX_AGGREGATED_ERRORS = 500
-_GLOBAL_SEMAPHORES: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
+_GLOBAL_SEMAPHORES: WeakKeyDictionary[asyncio.AbstractEventLoop, DynamicSemaphore] = (
     WeakKeyDictionary()
 )
 
 
-def _global_semaphore() -> asyncio.Semaphore:
+def _global_semaphore() -> DynamicSemaphore:
+    """获取当前事件循环的全局提取信号量（容量可动态调整）。
+
+    首次创建时优先采用运行时配置的全局并发上限（未加载则用默认 16）。
+    """
     loop = asyncio.get_running_loop()
     semaphore = _GLOBAL_SEMAPHORES.get(loop)
     if semaphore is None:
-        semaphore = asyncio.Semaphore(GLOBAL_EXTRACTION_CONCURRENCY)
+        limit = GLOBAL_EXTRACTION_CONCURRENCY
+        try:
+            from ..runtime_config_service import runtime_config_service
+
+            limit = runtime_config_service.cached()["global_concurrency"]
+        except Exception:  # noqa: BLE001
+            pass
+        semaphore = DynamicSemaphore(limit)
         _GLOBAL_SEMAPHORES[loop] = semaphore
     return semaphore
+
+
+def set_global_concurrency(limit: int) -> None:
+    """实时调整当前事件循环的全局提取并发上限（无运行事件循环时跳过）。"""
+    try:
+        _global_semaphore().set_limit(limit)
+    except RuntimeError:
+        logger.debug("set_global_concurrency 跳过（当前无运行事件循环）")
 
 
 class _AIError(BaseModel):

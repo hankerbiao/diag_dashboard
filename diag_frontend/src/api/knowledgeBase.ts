@@ -7,6 +7,8 @@ import type {
   LogExtractionPromptsResponse,
   MachineModelsResponse,
   RagflowDocumentsResponse,
+  RuntimeConfig,
+  RuntimeConfigResponse,
 } from './types';
 
 export interface SearchReference { chunk_id: string; content: string; similarity: number; doc_name: string; }
@@ -98,6 +100,10 @@ export const settingsApi = {
     );
   },
   async getMachineModels() { return fetchApi<MachineModelsResponse>('/api/settings/machine-models'); },
+  async getRuntimeConfig() { return fetchApi<RuntimeConfigResponse>('/api/settings/runtime-config'); },
+  async updateRuntimeConfig(body: Partial<RuntimeConfig>) {
+    return fetchApi<{ config: RuntimeConfig }>('/api/settings/runtime-config', { method: 'PUT', body: JSON.stringify(body) });
+  },
   async getExtractionPrompts() { return fetchApi<LogExtractionPromptsResponse>('/api/settings/log-extraction/prompts'); },
   async upsertExtractionPrompt(body: { model: string; system_prompt: string; user_template: string }) {
     return fetchApi<void>('/api/settings/log-extraction/prompts', { method: 'PUT', body: JSON.stringify(body) });
