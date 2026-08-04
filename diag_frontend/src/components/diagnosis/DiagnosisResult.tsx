@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Bot, Activity, AlertTriangle, Wrench, Terminal, ChevronDown, ChevronRight, Loader2, Cpu, Shield, History, BookOpen, Download } from 'lucide-react';
+import { Bot, Activity, AlertTriangle, Wrench, Terminal, ChevronDown, ChevronRight, Loader2, Cpu, Shield, History, BookOpen, Download, FileDown, Database } from 'lucide-react';
 import type { DiagnosisResult as DiagnosisResultType, TestLogItem, FailedLogFile } from '../../api/fastapi';
 import { diagnosisApi } from '../../api/fastapi';
 import ResultBadge from '../common/ResultBadge';
@@ -195,6 +195,131 @@ function downloadTextAsFile(content: string, filename: string) {
 }
 
 
+/** 提取方式的中文描述 */
+function extractionModeLabel(logFile: FailedLogFile): string {
+  if (!logFile.ai_extracted) return '编码级回退';
+  if (logFile.processing_mode === 'prefiltered_chunked') return '规则清洗 + AI 分块提取';
+  if (logFile.processing_mode === 'chunked') return 'AI 分块提取';
+  return 'AI 整体提取';
+}
+
+
+/** 构建 AI 深度诊断报告（Markdown），含诊断结论与完整证据链 */
+function buildDiagnosisReport(result: DiagnosisResultType, factory: string): string {
+  const lines: string[] = [];
+  const now = new Date().toLocaleString('zh-CN', { hour12: false });
+
+  lines.push(`# SN ${result.sn} AI 深度诊断报告`);
+  lines.push('');
+  lines.push(`- **序列号**: ${result.sn}`);
+  lines.push(`- **厂区**: ${factory}`);
+  lines.push(`- **生成时间**: ${now}`);
+  lines.push(`- **故障类别**: ${result.category || '-'}`);
+  lines.push(`- **置信度**: ${result.confidence != null ? `${Math.round(result.confidence * 100)}%` : '-'}`);
+  lines.push('');
+
+  lines.push('## 一、诊断摘要');
+  lines.push(result.summary || '（无）');
+  lines.push('');
+
+  if (result.root_cause_detail) {
+    lines.push('## 二、根因分析');
+    lines.push(result.root_cause_detail);
+    lines.push('');
+  }
+
+  if (result.affected_components?.length) {
+    lines.push('## 三、受影响组件');
+    result.affected_components.forEach((comp) => lines.push(`- ${comp}`));
+    lines.push('');
+  }
+
+  if (result.suggestions?.length) {
+    lines.push('## 四、维修建议');
+    result.suggestions.forEach((suggestion, index) => lines.push(`${index + 1}. ${suggestion}`));
+    lines.push('');
+  }
+
+  if (result.preventive_measures?.length) {
+    lines.push('## 五、预防措施');
+    result.preventive_measures.forEach((measure, index) => lines.push(`${index + 1}. ${measure}`));
+    lines.push('');
+  }
+
+  // 证据链：AI 实际分析参考的日志与数据
+  lines.push('## 六、AI 依据的参考日志（证据链）');
+  const logFiles = result.failed_log_files ?? [];
+  if (logFiles.length === 0) {
+    lines.push('（无失败日志文件进入 AI 分析）');
+  } else {
+    lines.push(`本次共 ${logFiles.length} 份失败日志进入 AI 分析，AI 实际读取的内容如下：`);
+    logFiles.forEach((logFile, index) => {
+      lines.push('');
+      lines.push(`### ${index + 1}. ${logFile.test_item}（${logFile.test_time}）`);
+      lines.push(`- 日志路径: ${logFile.log_path || '-'}`);
+      lines.push(`- 提取方式: ${extractionModeLabel(logFile)}`);
+      lines.push(`- 提取模型: ${logFile.model_used || 'default'}${logFile.prompt_model ? `（prompt: ${logFile.prompt_model}）` : ''}`);
+      lines.push(`- 错误行: ${logFile.matched_lines} / 总行数: ${logFile.total_lines}`);
+      if (logFile.segment_count > 0) {
+        lines.push(`- 分块: ${logFile.successful_segments}/${logFile.segment_count} 成功${logFile.failed_segments > 0 ? `，${logFile.failed_segments} 块编码级回退` : ''}`);
+      }
+      if (logFile.preprocessing_applied) {
+        lines.push(`- 规则清洗: 原始 ${logFile.preprocessing_original_lines ?? logFile.total_lines} 行 → 保留 ${logFile.preprocessing_kept_lines ?? 0} 行，过滤 ${logFile.preprocessing_removed_lines ?? 0} 行`);
+      }
+      if ((logFile.retry_count ?? 0) > 0) {
+        lines.push(`- 模型重试: ${logFile.retry_count} 次`);
+      }
+      lines.push('');
+      lines.push('```log');
+      lines.push(logFile.extracted_content || '（空）');
+      lines.push('```');
+    });
+  }
+  lines.push('');
+
+  if (result.merged_error_log) {
+    lines.push('## 七、AI 提取的错误日志（聚合）');
+    lines.push('');
+    lines.push('```log');
+    lines.push(result.merged_error_log);
+    lines.push('```');
+    lines.push('');
+  }
+
+  const knowledgeRefs = result.knowledge_refs ?? [];
+  if (knowledgeRefs.length > 0) {
+    lines.push('## 八、知识库引用');
+    knowledgeRefs.forEach((ref, index) => {
+      const title = ref.title || ref.source || `引用 ${index + 1}`;
+      lines.push(`${index + 1}. ${title}${ref.content ? ` — ${ref.content}` : ''}`);
+    });
+    lines.push('');
+  }
+
+  if (result.similar_cases?.length) {
+    lines.push('## 九、相似历史案例');
+    result.similar_cases.forEach((item) => {
+      const title = item.title || item.root_cause || '未命名案例';
+      const similarity = item.similarity != null ? `（相似度 ${Math.round(item.similarity * 100)}%）` : '';
+      lines.push(`- ${title}${similarity}${item.root_cause && item.title ? `：${item.root_cause}` : ''}`);
+    });
+    lines.push('');
+  }
+
+  if (result.maintenance_history?.length) {
+    lines.push('## 十、历史维修记录');
+    result.maintenance_history.forEach((record) => {
+      lines.push(`- ${record.date} · ${record.component} — ${record.action}`);
+    });
+    lines.push('');
+  }
+
+  lines.push('---');
+  lines.push('本报告由 WeaveEye 智能诊断系统自动生成，供测试/维修工程师参考。');
+  return lines.join('\n');
+}
+
+
 export default function DiagnosisResult({ result, factory, historyId }: DiagnosisResultProps) {
   const catStyle = getCategoryStyle(result.category);
   const failedLogs = collectFailedTestLogs(result);
@@ -266,6 +391,47 @@ export default function DiagnosisResult({ result, factory, historyId }: Diagnosi
                   </button>
                 </div>
               )}
+
+              {/* AI 分析报告下载：结论 + 证据链（AI 参考的日志与数据） */}
+              <div
+                className="mt-4 pt-3 border-t flex flex-wrap items-center justify-between gap-3"
+                style={{ borderColor: 'var(--color-border)' }}
+              >
+                <div className="min-w-0">
+                  <div className="text-[12px] font-semibold">AI 分析报告</div>
+                  <div className="text-[11px] mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
+                    含诊断结论与 AI 依据的参考日志、知识库引用等完整证据链
+                  </div>
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => downloadTextAsFile(buildDiagnosisReport(result, factory), `${result.sn}_AI诊断报告.md`)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[12px] font-bold transition-opacity hover:opacity-80"
+                    style={{ borderColor: 'var(--color-border)', color: 'var(--color-accent)', backgroundColor: 'var(--color-bg-primary)' }}
+                  >
+                    <FileDown className="w-3.5 h-3.5" />
+                    下载诊断报告 (Markdown)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const payload = {
+                        sn: result.sn,
+                        factory,
+                        generated_at: new Date().toISOString(),
+                        diagnosis_result: result,
+                      };
+                      downloadTextAsFile(JSON.stringify(payload, null, 2), `${result.sn}_诊断原始数据.json`);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[12px] font-bold transition-opacity hover:opacity-80"
+                    style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)', backgroundColor: 'var(--color-bg-secondary)' }}
+                  >
+                    <Database className="w-3.5 h-3.5" />
+                    原始数据 (JSON)
+                  </button>
+                </div>
+              </div>
             </div>
 
             {result.summary && (

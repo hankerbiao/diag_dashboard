@@ -20,6 +20,8 @@ export interface DiagnosisResult {
   failed_log_files?: FailedLogFile[];
   merged_error_log?: string;
   similar_cases: SimilarCaseItem[];
+  /** 诊断模型引用的知识库条目（证据链） */
+  knowledge_refs?: Array<{ source?: string; title?: string; content?: string }>;
 }
 
 export interface FailedLogFile {
