@@ -99,6 +99,17 @@ async def process_log(
         prompt = await registry.get_prompt(machine_model)
     prompt_model = prompt.get("model", DEFAULT_ID)
 
+    # 诊断日志：确认提取模板包含日志切片占位符，否则模型将收不到任何日志内容
+    user_template = prompt.get("user_template") or ""
+    if "{log_text}" not in user_template:
+        logger.warning(
+            "提取模板未包含 {log_text} 占位符，模型将收不到日志切片 "
+            "model=%s prompt_model=%s template_preview=%.160r",
+            machine_model or DEFAULT_ID,
+            prompt_model,
+            user_template[:160],
+        )
+
     if segment_chars is None or segment_chars <= 0:
         segment_chars = _estimate_segment_chars()
 

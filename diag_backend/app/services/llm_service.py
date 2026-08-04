@@ -988,6 +988,29 @@ class LLMService:
                 "返回 line_number 时必须使用此前缀中的原始行号，不要使用当前块内相对行号。"
             )
 
+        # 诊断日志：确认日志切片是否真正进入 user prompt（排查"模型看不到日志"）
+        segment_label = f"segment={stats.get('segment_index', 0) + 1}/{stats.get('segment_count', 1)}"
+        log_text = str(raw_log_text or "")
+        prompt_contains_log = bool(log_text) and log_text[:200] in user_prompt
+        if not prompt_contains_log:
+            logger.warning(
+                "AI 日志提取: 日志切片未进入 user prompt %s log_chars=%d prompt_chars=%d "
+                "template_has_log_placeholder=%s prompt_tail=%.160r",
+                segment_label,
+                len(log_text),
+                len(user_prompt),
+                "{log_text}" in template,
+                user_prompt[-160:],
+            )
+        else:
+            logger.debug(
+                "AI 日志提取请求 %s log_chars=%d prompt_chars=%d",
+                segment_label,
+                len(log_text),
+                len(user_prompt),
+            )
+
+        response = None
         try:
             response = await self.chat_completion(
                 [
@@ -999,10 +1022,17 @@ class LLMService:
             parsed = json.loads(self._extract_json(response))
             if not isinstance(parsed, dict) or not isinstance(parsed.get("errors", []), list):
                 raise ValueError("AI 日志提取结果结构无效")
+            logger.debug(
+                "AI 日志提取单段完成 %s errors=%d summary_chars=%d",
+                segment_label,
+                len(parsed.get("errors", [])),
+                len(str(parsed.get("summary", ""))),
+            )
             return parsed
         except Exception as e:
-            logger = __import__("logging").getLogger(__name__)
-            logger.warning("AI 日志提取失败 error=%s", e)
+            logger.warning("AI 日志提取失败 %s error=%s", segment_label, e)
+            if isinstance(response, str) and response.strip():
+                logger.warning("AI 日志提取失败响应原文片段: %.300r", response[:300])
             if raise_on_error:
                 raise RuntimeError(f"AI 日志提取失败: {e}") from e
             return dict(self.LOG_EXTRACTION_FALLBACK, summary=f"AI 日志提取异常: {e}")

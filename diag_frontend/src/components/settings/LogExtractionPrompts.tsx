@@ -179,6 +179,10 @@ export default function LogExtractionPrompts({ onErrorMessage, onSuccessMessage 
       setEditorError('System Prompt 和 User Prompt 模板不能为空');
       return;
     }
+    if (!editor.user_template.includes('{log_text}')) {
+      setEditorError('User Prompt 模板必须包含 {log_text}（日志内容占位符），否则模型收不到日志，提取结果为空');
+      return;
+    }
 
     const duplicate = prompts.find(
       (prompt) => !prompt.is_default && prompt.model.toLowerCase() === model.toLowerCase(),
@@ -479,9 +483,16 @@ export default function LogExtractionPrompts({ onErrorMessage, onSuccessMessage 
                 </label>
               </div>
 
-              <p className="mt-3 break-words text-[11px] leading-5" style={mutedStyle}>
-                可用变量：{'{log_text}'}、{'{total_lines}'}、{'{total_chars}'}、{'{matched_lines}'}、{'{paragraphs}'}
-              </p>
+              <div className="mt-3 space-y-2 rounded-lg border px-3 py-2.5 text-[11px] leading-5" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}>
+                <p style={mutedStyle}>
+                  <code className="font-mono font-bold" style={{ color: 'var(--color-accent)' }}>{'{log_text}'}</code>
+                  {' '}为日志切片内容占位符，<span className="font-bold" style={{ color: 'var(--color-warning, #b45309)' }}>必须包含</span>
+                  —— 缺失时模型收不到日志，提取结果为空。
+                </p>
+                <p style={mutedStyle}>
+                  其他可用变量：{'{total_lines}'}、{'{total_chars}'}、{'{matched_lines}'}、{'{paragraphs}'}、{'{segment_index}'}、{'{segment_count}'}、{'{segment_start_line}'}、{'{segment_end_line}'}
+                </p>
+              </div>
             </div>
 
             <div className="border-t px-4 py-4 sm:px-6" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-bg-primary)' }}>
